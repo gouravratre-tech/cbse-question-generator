@@ -6,10 +6,19 @@ const crypto = require('crypto');
 const path = require('path');
 
 const app = express();
+
 app.use(cors());
 app.use(express.json());
+
+// Serve static files (index.html, style.css, script.js)
 app.use(express.static(path.join(__dirname)));
 
+// Route for homepage
+app.get('/', (req, res) => {
+    res.sendFile(path.join(__dirname, 'index.html'));
+});
+
+// In-memory history tracking
 const questionHistory = new Map();
 
 function historyKey(c, s, ch) {
@@ -20,7 +29,7 @@ app.post('/api/generate', async (req, res) => {
     const { classNum, subject, chapters } = req.body;
 
     if (!classNum || !subject || !chapters || chapters.length === 0) {
-        return res.status(400).json({ error: 'Missing fields' });
+        return res.status(400).json({ error: 'Missing required fields' });
     }
 
     const hKey = historyKey(classNum, subject, [...chapters]);
@@ -33,9 +42,8 @@ app.post('/api/generate', async (req, res) => {
     const seed = crypto.randomBytes(16).toString('hex');
     const ts = Date.now();
 
-    // Critical instruction: Class 9 has entirely new books based on NCF-SE.
     const syllabusContext = classNum === '9' 
-        ? `CRITICAL: Class 9 now uses the BRAND NEW NCF-SE 2023/2026 syllabus. For example, Math has 'Orienting Yourself', Science has 'Exploration', Social Science is one combined book. YOU MUST ONLY ASK QUESTIONS RELEVANT TO THESE NEW SPECIFIC TITLES. DO NOT use the old pre-2024 syllabus.` 
+        ? `CRITICAL: Class 9 uses the BRAND NEW NCF-SE 2023/2026 syllabus. Math has 'Orienting Yourself', Science has 'Exploration', Social Science is one combined book. Ask questions relevant ONLY to these new titles.` 
         : `Use the rationalized NCERT Class 10 syllabus.`;
 
     const prompt = `You are an expert CBSE Board paper setter. Generate a UNIQUE practice question paper.
@@ -138,6 +146,7 @@ RESPOND WITH PURE VALID JSON ONLY. NO MARKDOWN:
     }
 });
 
-app.listen(process.env.PORT || 3000, () => {
-    console.log(`Server running at http://localhost:${process.env.PORT || 3000}`);
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+    console.log(`Server listening on port ${PORT}`);
 });
