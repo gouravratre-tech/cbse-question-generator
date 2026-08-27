@@ -25,7 +25,7 @@
         <section class="config-panel">
             <div class="config-grid">
                 <div class="field">
-                    <label>Select Class</label>
+                    <label><i class="fas fa-graduation-cap"></i> Select Class</label>
                     <select id="classSelect">
                         <option value="">— Select Class —</option>
                         <option value="9">Class 9 (New NCF Books)</option>
@@ -33,29 +33,122 @@
                     </select>
                 </div>
                 <div class="field">
-                    <label>Select Subject</label>
+                    <label><i class="fas fa-book"></i> Select Subject</label>
                     <select id="subjectSelect" disabled>
                         <option value="">— Select Subject —</option>
                     </select>
                 </div>
+
+                <!-- Chapters -->
                 <div class="field field-full">
-                    <label>Chapters <span id="chapterCount"></span></label>
+                    <label><i class="fas fa-list"></i> Chapters <span id="chapterCount"></span></label>
                     <div id="chapterBox" class="chapter-box">
                         <div class="empty-state">Select class & subject first</div>
                     </div>
                 </div>
+
+                <!-- ===== QUESTION TYPE FILTER ===== -->
+                <div class="field field-full">
+                    <label><i class="fas fa-filter"></i> Question Types to Generate</label>
+                    <div class="qtype-box">
+                        <div class="qtype-header">
+                            <div class="qtype-select-all">
+                                <input type="checkbox" id="qtypeAll" checked>
+                                <label for="qtypeAll">Select All Types</label>
+                            </div>
+                            <div class="qtype-count" id="qtypeCount">6 types selected</div>
+                        </div>
+                        <div class="qtype-grid">
+                            <label class="qtype-item">
+                                <input type="checkbox" class="qtype-cb" value="mcq" checked>
+                                <div class="qtype-card">
+                                    <span class="qtype-icon">📝</span>
+                                    <span class="qtype-name">MCQ</span>
+                                    <span class="qtype-marks">1 mark × 5</span>
+                                </div>
+                            </label>
+                            <label class="qtype-item">
+                                <input type="checkbox" class="qtype-cb" value="assertion_reason" checked>
+                                <div class="qtype-card">
+                                    <span class="qtype-icon">🔄</span>
+                                    <span class="qtype-name">Assertion-Reason</span>
+                                    <span class="qtype-marks">1 mark × 5</span>
+                                </div>
+                            </label>
+                            <label class="qtype-item">
+                                <input type="checkbox" class="qtype-cb" value="short_2marks" checked>
+                                <div class="qtype-card">
+                                    <span class="qtype-icon">✏️</span>
+                                    <span class="qtype-name">Short Answer (2M)</span>
+                                    <span class="qtype-marks">2 marks × 5</span>
+                                </div>
+                            </label>
+                            <label class="qtype-item">
+                                <input type="checkbox" class="qtype-cb" value="short_3marks" checked>
+                                <div class="qtype-card">
+                                    <span class="qtype-icon">✍️</span>
+                                    <span class="qtype-name">Short Answer (3M)</span>
+                                    <span class="qtype-marks">3 marks × 5</span>
+                                </div>
+                            </label>
+                            <label class="qtype-item">
+                                <input type="checkbox" class="qtype-cb" value="case_based" checked>
+                                <div class="qtype-card">
+                                    <span class="qtype-icon">📊</span>
+                                    <span class="qtype-name">Case/Source Based</span>
+                                    <span class="qtype-marks">4 marks × 5</span>
+                                </div>
+                            </label>
+                            <label class="qtype-item">
+                                <input type="checkbox" class="qtype-cb" value="long_answer" checked>
+                                <div class="qtype-card">
+                                    <span class="qtype-icon">📖</span>
+                                    <span class="qtype-name">Long Answer (5M)</span>
+                                    <span class="qtype-marks">5 marks × 5</span>
+                                </div>
+                            </label>
+                        </div>
+                        <!-- Custom number input -->
+                        <div class="qnum-row">
+                            <label for="qNumEach">Questions per type:</label>
+                            <select id="qNumEach">
+                                <option value="3">3 questions</option>
+                                <option value="5" selected>5 questions</option>
+                                <option value="7">7 questions</option>
+                                <option value="10">10 questions</option>
+                            </select>
+                            <span id="totalMarksPreview" class="total-marks">Total: 80 marks</span>
+                        </div>
+                    </div>
+                </div>
             </div>
+
             <div class="actions">
-                <button id="generateBtn" class="btn btn-primary" disabled><i class="fas fa-wand-magic"></i> Generate Paper</button>
-                <button id="regenBtn" class="btn btn-success" style="display:none"><i class="fas fa-sync"></i> New Paper</button>
-                <button id="printBtn" class="btn btn-info" style="display:none"><i class="fas fa-print"></i> Print</button>
+                <button id="generateBtn" class="btn btn-primary" disabled>
+                    <i class="fas fa-wand-magic"></i> Generate Paper
+                </button>
+                <button id="regenBtn" class="btn btn-success" style="display:none">
+                    <i class="fas fa-sync"></i> New Paper
+                </button>
+                <button id="printBtn" class="btn btn-info" style="display:none">
+                    <i class="fas fa-print"></i> Print
+                </button>
             </div>
         </section>
 
         <section id="loader" class="loader-panel" style="display:none">
             <div class="spinner"><i class="fas fa-circle-notch fa-spin"></i></div>
             <h3>Generating your unique paper...</h3>
-            <p>Scanning NCERT textbooks and drafting questions.</p>
+            <p id="loaderMsg">Scanning NCERT textbooks and drafting questions.</p>
+        </section>
+
+        <section id="errorBox" class="error-panel" style="display:none">
+            <i class="fas fa-triangle-exclamation"></i>
+            <h3>Generation Failed</h3>
+            <p id="errMsg">Something went wrong.</p>
+            <button class="btn btn-primary" onclick="document.getElementById('errorBox').style.display='none'">
+                <i class="fas fa-redo"></i> Dismiss
+            </button>
         </section>
 
         <section id="paper" class="paper" style="display:none">
@@ -71,7 +164,7 @@
             <div class="answers-head"><h2>Answer Key</h2></div>
             <div id="answersBody" class="answers-body"></div>
         </section>
-        
+
         <div class="toggle-wrap">
             <button id="toggleAnswers" class="btn btn-warning" style="display:none">Show Answers</button>
         </div>
