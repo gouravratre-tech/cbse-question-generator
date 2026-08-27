@@ -10,10 +10,9 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Serve static files (index.html, style.css, script.js)
+// Serve frontend static files
 app.use(express.static(path.join(__dirname)));
 
-// Route for homepage
 app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, 'index.html'));
 });
@@ -26,27 +25,33 @@ function historyKey(c, s, ch) {
 }
 
 app.post('/api/generate', async (req, res) => {
-    const { classNum, subject, chapters } = req.body;
+    try {
+        const { classNum, subject, chapters } = req.body;
 
-    if (!classNum || !subject || !chapters || chapters.length === 0) {
-        return res.status(400).json({ error: 'Missing required fields' });
-    }
+        if (!process.env.GROQ_API_KEY) {
+            console.error('ERROR: GROQ_API_KEY environment variable is not set!');
+            return res.status(500).json({ error: 'Server Error: GROQ_API_KEY is missing in Render settings.' });
+        }
 
-    const hKey = historyKey(classNum, subject, [...chapters]);
-    const prevQuestions = questionHistory.get(hKey) || [];
+        if (!classNum || !subject || !chapters || chapters.length === 0) {
+            return res.status(400).json({ error: 'Please select class, subject, and chapters.' });
+        }
 
-    const avoidBlock = prevQuestions.length > 0
-        ? `\n\n⚠️ CRITICAL: DO NOT REPEAT ANY OF THESE PREVIOUS QUESTIONS:\n"""\n${prevQuestions.slice(-80).join('\n')}\n"""\n`
-        : '';
+        const hKey = historyKey(classNum, subject, [...chapters]);
+        const prevQuestions = questionHistory.get(hKey) || [];
 
-    const seed = crypto.randomBytes(16).toString('hex');
-    const ts = Date.now();
+        const avoidBlock = prevQuestions.length > 0
+            ? `\n\n⚠️ DO NOT REPEAT THESE QUESTIONS:\n"""\n${prevQuestions.slice(-80).join('\n')}\n"""\n`
+            : '';
 
-    const syllabusContext = classNum === '9' 
-        ? `CRITICAL: Class 9 uses the BRAND NEW NCF-SE 2023/2026 syllabus. Math has 'Orienting Yourself', Science has 'Exploration', Social Science is one combined book. Ask questions relevant ONLY to these new titles.` 
-        : `Use the rationalized NCERT Class 10 syllabus.`;
+        const seed = crypto.randomBytes(16).toString('hex');
+        const ts = Date.now();
 
-    const prompt = `You are an expert CBSE Board paper setter. Generate a UNIQUE practice question paper.
+        const syllabusContext = classNum === '9' 
+            ? `Class 9 uses the NEW NCF-SE syllabus (Math: 'Orienting Yourself', Science: 'Exploration', Social Science: combined book). Ask questions strictly relevant to these.` 
+            : `Use Class 10 NCERT syllabus.`;
+
+        const prompt = `You are an expert CBSE Board paper setter. Generate a UNIQUE practice question paper.
 
 TEXTBOOK: NCERT Class ${classNum} ${subject} — Latest Edition
 CHAPTERS SELECTED: ${chapters.join(' | ')}
@@ -56,25 +61,20 @@ UNIQUE ID: ${seed}-${ts}
 
 Generate EXACTLY 5 questions in EACH of these 6 sections (30 total):
 1. SECTION A: MCQ (1 mark × 5) - 4 options (a,b,c,d), mention correct answer.
-2. SECTION B: ASSERTION-REASON (1 mark × 5) - Options: (a) Both true, R explains A (b) Both true, R doesn't explain A (c) A true, R false (d) A false, R true.
+2. SECTION B: ASSERTION-REASON (1 mark × 5) - Standard CBSE options.
 3. SECTION C: SHORT ANSWER (2 marks × 5)
 4. SECTION D: SHORT ANSWER (3 marks × 5)
-5. SECTION E: CASE/SOURCE BASED (4 marks × 5) - A detailed passage/case (80+ words) followed by exactly 4 sub-questions (i, ii, iii, iv) of 1 mark each.
+5. SECTION E: CASE/SOURCE BASED (4 marks × 5) - Detailed passage (80+ words) followed by 4 sub-questions (i, ii, iii, iv).
 6. SECTION F: LONG ANSWER (5 marks × 5)
 
 RULES:
-1. Every question MUST be original and unique.
-2. HTML formatting for science/math:
-   - Subscripts: <sub>text</sub> → H<sub>2</sub>O, CO<sub>2</sub>
-   - Superscripts: <sup>text</sup> → x<sup>2</sup>, m<sup>2</sup>
-   - NEVER write plain H2O or x2.
-3. Distribute questions across selected chapters.
-4. Difficulty: 30% easy, 40% moderate, 30% hard.
+- Original questions only.
+- Math/Science: Use <sub> for subscripts (H<sub>2</sub>O) and <sup> for superscripts (x<sup>2</sup>).
 ${avoidBlock}
 
-RESPOND WITH PURE VALID JSON ONLY. NO MARKDOWN:
+RESPOND ONLY WITH VALID JSON (NO MARKDOWN CODEBLOCKS):
 {
-  "mcq": [{"question": "q text", "options": {"a": "o1", "b": "o2", "c": "o3", "d": "o4"}, "answer": "a", "chapter": "ch"}],
+  "mcq": [{"question": "q", "options": {"a": "1", "b": "2", "c": "3", "d": "4"}, "answer": "a", "chapter": "ch"}],
   "assertion_reason": [{"assertion": "A", "reason": "R", "options": {"a": "Both true, R explains A", "b": "Both true, R not explains A", "c": "A true, R false", "d": "A false, R true"}, "answer": "a", "chapter": "ch"}],
   "short_2marks": [{"question": "q", "answer": "ans", "chapter": "ch"}],
   "short_3marks": [{"question": "q", "answer": "ans", "chapter": "ch"}],
@@ -82,32 +82,35 @@ RESPOND WITH PURE VALID JSON ONLY. NO MARKDOWN:
   "long_answer": [{"question": "q", "answer": "ans", "chapter": "ch"}]
 }`;
 
-    try {
         const groqResponse = await fetch('https://api.groq.com/openai/v1/chat/completions', {
             method: 'POST',
             headers: {
-                'Authorization': `Bearer ${process.env.GROQ_API_KEY}`,
+                'Authorization': `Bearer ${process.env.GROQ_API_KEY.trim()}`,
                 'Content-Type': 'application/json',
             },
             body: JSON.stringify({
                 model: 'llama-3.3-70b-versatile',
                 messages: [
-                    {
-                        role: 'system',
-                        content: `You are a CBSE exam setter. Always use <sub> and <sup> tags for math/science. Output strictly in JSON format.`
-                    },
+                    { role: 'system', content: 'You are a CBSE exam paper generator. Output strictly in JSON format.' },
                     { role: 'user', content: prompt }
                 ],
                 temperature: 1.0,
-                max_tokens: 8000,
-                top_p: 0.95
+                max_tokens: 8000
             })
         });
 
-        if (!groqResponse.ok) throw new Error(`API Error: ${groqResponse.status}`);
+        if (!groqResponse.ok) {
+            const errData = await groqResponse.text();
+            console.error('Groq API Returned Error Status:', groqResponse.status, errData);
+            return res.status(500).json({ error: `Groq API Error (${groqResponse.status}): ${errData}` });
+        }
 
         const data = await groqResponse.json();
         let content = data.choices?.[0]?.message?.content;
+
+        if (!content) {
+            return res.status(500).json({ error: 'AI returned an empty response. Please retry.' });
+        }
 
         content = content.replace(/```json\s*/gi, '').replace(/```\s*/gi, '').trim();
         const firstBrace = content.indexOf('{');
@@ -116,13 +119,18 @@ RESPOND WITH PURE VALID JSON ONLY. NO MARKDOWN:
             content = content.substring(firstBrace, lastBrace + 1);
         }
 
-        const questions = JSON.parse(content);
+        let questions;
+        try {
+            questions = JSON.parse(content);
+        } catch (pErr) {
+            console.error('Failed to parse AI response:', content.substring(0, 300));
+            return res.status(500).json({ error: 'AI response was malformed JSON. Please click Generate again.' });
+        }
 
+        // Store generated texts in history
         const newTexts = [];
         const grab = (arr, field) => {
-            if (Array.isArray(arr)) arr.forEach(q => {
-                if (q[field]) newTexts.push(q[field].substring(0, 150));
-            });
+            if (Array.isArray(arr)) arr.forEach(q => { if (q[field]) newTexts.push(q[field].substring(0, 150)); });
         };
         grab(questions.mcq, 'question');
         grab(questions.assertion_reason, 'assertion');
@@ -130,9 +138,7 @@ RESPOND WITH PURE VALID JSON ONLY. NO MARKDOWN:
         grab(questions.short_3marks, 'question');
         grab(questions.long_answer, 'question');
         if (Array.isArray(questions.case_based)) {
-            questions.case_based.forEach(q => {
-                if (q.case_study) newTexts.push(q.case_study.substring(0, 150));
-            });
+            questions.case_based.forEach(q => { if (q.case_study) newTexts.push(q.case_study.substring(0, 150)); });
         }
 
         const updated = [...prevQuestions, ...newTexts].slice(-200);
@@ -141,12 +147,10 @@ RESPOND WITH PURE VALID JSON ONLY. NO MARKDOWN:
         res.json({ success: true, questions, meta: { classNum, subject, chapters } });
 
     } catch (err) {
-        console.error(err);
-        res.status(500).json({ error: 'Internal server error', message: err.message });
+        console.error('Server Catch Error:', err);
+        res.status(500).json({ error: `Server catch error: ${err.message}` });
     }
 });
 
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-    console.log(`Server listening on port ${PORT}`);
-});
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
