@@ -1,12 +1,11 @@
 {
   "name": "cbse-question-paper-generator",
-  "version": "3.0.0",
-  "description": "AI CBSE Question Paper Generator - New NCF 2026-27 Syllabus",
+  "version": "1.0.0",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js",
-    "dev": "nodemon server.js"
-  },
+    "start": "node server.js"
+  }
+}
   "dependencies": {
     "cors": "^2.8.5",
     "dotenv": "^16.4.7",
