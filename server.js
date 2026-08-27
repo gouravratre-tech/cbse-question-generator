@@ -6,18 +6,14 @@ const crypto = require('crypto');
 const path = require('path');
 
 const app = express();
-
 app.use(cors());
 app.use(express.json());
-
-// Serve frontend static files
 app.use(express.static(path.join(__dirname)));
 
 app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, 'index.html'));
 });
 
-// In-memory history tracking to prevent question repetition
 const questionHistory = new Map();
 
 function historyKey(c, s, ch) {
@@ -28,9 +24,8 @@ app.post('/api/generate', async (req, res) => {
     try {
         const { classNum, subject, chapters } = req.body;
 
-        if (!process.env.GROQ_API_KEY) {
-            console.error('ERROR: GROQ_API_KEY environment variable is not set!');
-            return res.status(500).json({ error: 'Server Error: GROQ_API_KEY is missing in Render settings.' });
+        if (!process.env.GEMINI_API_KEY) {
+            return res.status(500).json({ error: 'GEMINI_API_KEY is missing in Render settings.' });
         }
 
         if (!classNum || !subject || !chapters || chapters.length === 0) {
@@ -41,107 +36,84 @@ app.post('/api/generate', async (req, res) => {
         const prevQuestions = questionHistory.get(hKey) || [];
 
         const avoidBlock = prevQuestions.length > 0
-            ? `\n\n⚠️ DO NOT REPEAT THESE QUESTIONS:\n"""\n${prevQuestions.slice(-80).join('\n')}\n"""\n`
+            ? `\n\nDO NOT REPEAT THESE PREVIOUS QUESTIONS:\n"""\n${prevQuestions.slice(-80).join('\n')}\n"""\n`
             : '';
 
         const seed = crypto.randomBytes(16).toString('hex');
         const ts = Date.now();
 
-        const syllabusContext = classNum === '9' 
-            ? `Class 9 uses the NEW NCF-SE syllabus (Math: 'Orienting Yourself', Science: 'Exploration', Social Science: combined book). Ask questions strictly relevant to these.` 
-            : `Use Class 10 NCERT syllabus.`;
+        const syllabusCtx = classNum === '9'
+            ? `Class 9 uses NEW NCF-SE 2026 books. Math: 'Orienting Yourself', Science: 'Exploration', Social Science: combined book. Ask questions RELEVANT ONLY to these new titles.`
+            : `Use Class 10 rationalized NCERT syllabus.`;
 
         const prompt = `You are an expert CBSE Board paper setter. Generate a UNIQUE practice question paper.
 
 TEXTBOOK: NCERT Class ${classNum} ${subject} — Latest Edition
-CHAPTERS SELECTED: ${chapters.join(' | ')}
-${syllabusContext}
+CHAPTERS: ${chapters.join(' | ')}
+${syllabusCtx}
 
 UNIQUE ID: ${seed}-${ts}
 
-Generate EXACTLY 5 questions in EACH of these 6 sections (30 total):
-1. SECTION A: MCQ (1 mark × 5) - 4 options (a,b,c,d), mention correct answer.
-2. SECTION B: ASSERTION-REASON (1 mark × 5) - Standard CBSE options.
-3. SECTION C: SHORT ANSWER (2 marks × 5)
-4. SECTION D: SHORT ANSWER (3 marks × 5)
-5. SECTION E: CASE/SOURCE BASED (4 marks × 5) - Detailed passage (80+ words) followed by 4 sub-questions (i, ii, iii, iv).
-6. SECTION F: LONG ANSWER (5 marks × 5)
+Generate EXACTLY 5 questions in EACH section (30 total):
+
+SECTION A: MCQ (1 mark × 5) — 4 options (a,b,c,d) + correct answer
+SECTION B: ASSERTION-REASON (1 mark × 5) — A and R + 4 standard options + correct answer
+SECTION C: SHORT ANSWER (2 marks × 5) — question + model answer
+SECTION D: SHORT ANSWER (3 marks × 5) — question + model answer
+SECTION E: CASE/SOURCE BASED (4 marks × 5) — passage (80+ words) + 4 sub-questions (i,ii,iii,iv) + answers
+SECTION F: LONG ANSWER (5 marks × 5) — question + key points answer
 
 RULES:
-- Original questions only.
-- Math/Science: Use <sub> for subscripts (H<sub>2</sub>O) and <sup> for superscripts (x<sup>2</sup>).
+- Every question MUST be original
+- Math/Science: Use <sub> for subscripts (H<sub>2</sub>O) and <sup> for superscripts (x<sup>2</sup>)
+- NEVER write plain H2O or x2 — always use HTML tags
 ${avoidBlock}
 
-RESPOND ONLY WITH VALID JSON (NO MARKDOWN CODEBLOCKS):
+RESPOND ONLY WITH VALID JSON (NO markdown, NO codeblocks):
 {
-  "mcq": [{"question": "q", "options": {"a": "1", "b": "2", "c": "3", "d": "4"}, "answer": "a", "chapter": "ch"}],
-  "assertion_reason": [{"assertion": "A", "reason": "R", "options": {"a": "Both true, R explains A", "b": "Both true, R not explains A", "c": "A true, R false", "d": "A false, R true"}, "answer": "a", "chapter": "ch"}],
+  "mcq": [{"question": "q", "options": {"a": "o1", "b": "o2", "c": "o3", "d": "o4"}, "answer": "a", "chapter": "ch"}],
+  "assertion_reason": [{"assertion": "A", "reason": "R", "options": {"a": "Both A and R true, R explains A", "b": "Both A and R true, R not explains A", "c": "A true, R false", "d": "A false, R true"}, "answer": "a", "chapter": "ch"}],
   "short_2marks": [{"question": "q", "answer": "ans", "chapter": "ch"}],
   "short_3marks": [{"question": "q", "answer": "ans", "chapter": "ch"}],
-  "case_based": [{"case_study": "passage", "sub_questions": [{"question": "sub q", "answer": "ans", "marks": 1}], "chapter": "ch"}],
-  "long_answer": [{"question": "q", "answer": "ans", "chapter": "ch"}]
+  "case_based": [{"case_study": "passage 80+ words", "sub_questions": [{"question": "sub q", "answer": "ans", "marks": 1}], "chapter": "ch"}],
+  "long_answer": [{"question": "q", "answer": "key points", "chapter": "ch"}]
 }`;
 
-        // List of fallback models to cycle through if the primary fails
-        const modelsToTry = [
-            'llama3-70b-8192',
-            'mixtral-8x7b-32768',
-            'llama3-8b-8192',
-            'llama-3.1-8b-instant',
-            'gemma2-9b-it',
-            
-        ];
-        
-        let groqResponse;
-        let successfulModel = '';
-        let lastError = '';
+        // ===== GEMINI API CALL =====
+        const apiKey = process.env.GEMINI_API_KEY.trim();
+        const geminiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${apiKey}`;
 
-        for (const model of modelsToTry) {
-            console.log(`Attempting generation with model: ${model}`);
-            try {
-                groqResponse = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-                    method: 'POST',
-                    headers: {
-                        'Authorization': `Bearer ${process.env.GROQ_API_KEY.trim()}`,
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({
-                        model: model,
-                        messages: [
-                            { role: 'system', content: 'You are a CBSE exam paper generator. Output strictly in JSON format.' },
-                            { role: 'user', content: prompt }
-                        ],
-                        temperature: 1.0,
-                        max_tokens: 8000
-                    })
-                });
-
-                if (groqResponse.ok) {
-                    successfulModel = model;
-                    console.log(`Success with model: ${model}`);
-                    break; // Exit loop on success
-                } else {
-                    const errText = await groqResponse.text();
-                    lastError = `Model ${model} returned: ${groqResponse.status} - ${errText}`;
-                    console.warn(lastError);
+        const geminiResponse = await fetch(geminiUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                contents: [
+                    {
+                        parts: [{ text: `You are a CBSE exam paper generator. Output ONLY valid JSON. No markdown. No codeblocks.\n\n${prompt}` }]
+                    }
+                ],
+                generationConfig: {
+                    temperature: 1.0,
+                    maxOutputTokens: 8192,
+                    topP: 0.95
                 }
-            } catch (e) {
-                lastError = `Fetch attempt failed for model ${model}: ${e.message}`;
-                console.warn(lastError);
-            }
+            })
+        });
+
+        if (!geminiResponse.ok) {
+            const errText = await geminiResponse.text();
+            console.error('Gemini API Error:', geminiResponse.status, errText);
+            return res.status(500).json({ error: `Gemini API Error (${geminiResponse.status}): ${errText}` });
         }
 
-        if (!groqResponse || !groqResponse.ok) {
-            return res.status(500).json({ error: `All models failed to generate. Last error detail: ${lastError}` });
-        }
-
-        const data = await groqResponse.json();
-        let content = data.choices?.[0]?.message?.content;
+        const data = await geminiResponse.json();
+        let content = data.candidates?.[0]?.content?.parts?.[0]?.text;
 
         if (!content) {
-            return res.status(500).json({ error: 'AI returned an empty response. Please retry.' });
+            return res.status(500).json({ error: 'AI returned empty response. Please retry.' });
         }
 
+        // Clean response
         content = content.replace(/```json\s*/gi, '').replace(/```\s*/gi, '').trim();
         const firstBrace = content.indexOf('{');
         const lastBrace = content.lastIndexOf('}');
@@ -153,14 +125,16 @@ RESPOND ONLY WITH VALID JSON (NO MARKDOWN CODEBLOCKS):
         try {
             questions = JSON.parse(content);
         } catch (pErr) {
-            console.error('Failed to parse AI response:', content.substring(0, 300));
-            return res.status(500).json({ error: 'AI response was malformed JSON. Please click Generate again.' });
+            console.error('JSON Parse Error. Raw:', content.substring(0, 500));
+            return res.status(500).json({ error: 'AI returned invalid JSON. Please click Generate again.' });
         }
 
-        // Store generated questions in history
+        // History tracking
         const newTexts = [];
         const grab = (arr, field) => {
-            if (Array.isArray(arr)) arr.forEach(q => { if (q[field]) newTexts.push(q[field].substring(0, 150)); });
+            if (Array.isArray(arr)) arr.forEach(q => {
+                if (q[field]) newTexts.push(q[field].substring(0, 150));
+            });
         };
         grab(questions.mcq, 'question');
         grab(questions.assertion_reason, 'assertion');
@@ -168,17 +142,23 @@ RESPOND ONLY WITH VALID JSON (NO MARKDOWN CODEBLOCKS):
         grab(questions.short_3marks, 'question');
         grab(questions.long_answer, 'question');
         if (Array.isArray(questions.case_based)) {
-            questions.case_based.forEach(q => { if (q.case_study) newTexts.push(q.case_study.substring(0, 150)); });
+            questions.case_based.forEach(q => {
+                if (q.case_study) newTexts.push(q.case_study.substring(0, 150));
+            });
         }
 
         const updated = [...prevQuestions, ...newTexts].slice(-200);
         questionHistory.set(hKey, updated);
 
-        res.json({ success: true, questions, meta: { classNum, subject, chapters, modelUsed: successfulModel } });
+        res.json({
+            success: true,
+            questions,
+            meta: { classNum, subject, chapters }
+        });
 
     } catch (err) {
-        console.error('Server Catch Error:', err);
-        res.status(500).json({ error: `Server catch error: ${err.message}` });
+        console.error('Server Error:', err);
+        res.status(500).json({ error: `Server error: ${err.message}` });
     }
 });
 
