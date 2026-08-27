@@ -1,7 +1,7 @@
 {
-  "name": "cbse-question-paper-generator",
-  "version": "3.0.0",
-  "description": "AI CBSE Question Paper Generator",
+  "name": "cbse-question-paper-blueprint-builder",
+  "version": "4.0.0",
+  "description": "Interactive CBSE Question Paper Builder with Blueprint Slot-Allocation",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
@@ -12,8 +12,5 @@
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
     "node-fetch": "^2.7.0"
-  },
-  "engines": {
-    "node": ">=18.0.0"
   }
 }
