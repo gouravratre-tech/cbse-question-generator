@@ -17,7 +17,7 @@ app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, 'index.html'));
 });
 
-// In-memory history tracking
+// In-memory history tracking to prevent question repetition
 const questionHistory = new Map();
 
 function historyKey(c, s, ch) {
@@ -82,27 +82,57 @@ RESPOND ONLY WITH VALID JSON (NO MARKDOWN CODEBLOCKS):
   "long_answer": [{"question": "q", "answer": "ans", "chapter": "ch"}]
 }`;
 
-        const groqResponse = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-            method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${process.env.GROQ_API_KEY.trim()}`,
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-                model: 'llama-3.3-70b-versatile',
-                messages: [
-                    { role: 'system', content: 'You are a CBSE exam paper generator. Output strictly in JSON format.' },
-                    { role: 'user', content: prompt }
-                ],
-                temperature: 1.0,
-                max_tokens: 8000
-            })
-        });
+        // List of fallback models to cycle through if the primary fails
+        const modelsToTry = [
+            'llama3-70b-8192',
+            'mixtral-8x7b-32768',
+            'llama3-8b-8192',
+            'llama-3.1-8b-instant',
+            'gemma2-9b-it',
+            
+        ];
+        
+        let groqResponse;
+        let successfulModel = '';
+        let lastError = '';
 
-        if (!groqResponse.ok) {
-            const errData = await groqResponse.text();
-            console.error('Groq API Returned Error Status:', groqResponse.status, errData);
-            return res.status(500).json({ error: `Groq API Error (${groqResponse.status}): ${errData}` });
+        for (const model of modelsToTry) {
+            console.log(`Attempting generation with model: ${model}`);
+            try {
+                groqResponse = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${process.env.GROQ_API_KEY.trim()}`,
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        model: model,
+                        messages: [
+                            { role: 'system', content: 'You are a CBSE exam paper generator. Output strictly in JSON format.' },
+                            { role: 'user', content: prompt }
+                        ],
+                        temperature: 1.0,
+                        max_tokens: 8000
+                    })
+                });
+
+                if (groqResponse.ok) {
+                    successfulModel = model;
+                    console.log(`Success with model: ${model}`);
+                    break; // Exit loop on success
+                } else {
+                    const errText = await groqResponse.text();
+                    lastError = `Model ${model} returned: ${groqResponse.status} - ${errText}`;
+                    console.warn(lastError);
+                }
+            } catch (e) {
+                lastError = `Fetch attempt failed for model ${model}: ${e.message}`;
+                console.warn(lastError);
+            }
+        }
+
+        if (!groqResponse || !groqResponse.ok) {
+            return res.status(500).json({ error: `All models failed to generate. Last error detail: ${lastError}` });
         }
 
         const data = await groqResponse.json();
@@ -127,7 +157,7 @@ RESPOND ONLY WITH VALID JSON (NO MARKDOWN CODEBLOCKS):
             return res.status(500).json({ error: 'AI response was malformed JSON. Please click Generate again.' });
         }
 
-        // Store generated texts in history
+        // Store generated questions in history
         const newTexts = [];
         const grab = (arr, field) => {
             if (Array.isArray(arr)) arr.forEach(q => { if (q[field]) newTexts.push(q[field].substring(0, 150)); });
@@ -144,7 +174,7 @@ RESPOND ONLY WITH VALID JSON (NO MARKDOWN CODEBLOCKS):
         const updated = [...prevQuestions, ...newTexts].slice(-200);
         questionHistory.set(hKey, updated);
 
-        res.json({ success: true, questions, meta: { classNum, subject, chapters } });
+        res.json({ success: true, questions, meta: { classNum, subject, chapters, modelUsed: successfulModel } });
 
     } catch (err) {
         console.error('Server Catch Error:', err);
