@@ -23,6 +23,87 @@ function historyKey(cls, sub, chapters) {
     return `${cls}::${sub}::${(chapters || []).sort().join('||')}`;
 }
 
+// --- Structured-output schemas -------------------------------------------------
+// Relying on prompt text alone ("respond with JSON shaped like...") is not
+// enough — Gemini can and does drift to a different shape (e.g. producing a
+// case-study passage when an MCQ was requested), and the front-end will then
+// happily render whatever field it finds. Passing a real Gemini responseSchema
+// forces the model to emit exactly the fields for the requested question
+// type(s), so a slot asked for "mcq" can never come back shaped like
+// "case_based".
+const ITEM_SCHEMAS = {
+    mcq: {
+        type: 'OBJECT',
+        properties: {
+            question: { type: 'STRING' },
+            options: {
+                type: 'OBJECT',
+                properties: { a: { type: 'STRING' }, b: { type: 'STRING' }, c: { type: 'STRING' }, d: { type: 'STRING' } },
+                required: ['a', 'b', 'c', 'd']
+            },
+            answer: { type: 'STRING', enum: ['a', 'b', 'c', 'd'] },
+            chapter: { type: 'STRING' }
+        },
+        required: ['question', 'options', 'answer']
+    },
+    assertion_reason: {
+        type: 'OBJECT',
+        properties: {
+            assertion: { type: 'STRING' },
+            reason: { type: 'STRING' },
+            options: {
+                type: 'OBJECT',
+                properties: { a: { type: 'STRING' }, b: { type: 'STRING' }, c: { type: 'STRING' }, d: { type: 'STRING' } },
+                required: ['a', 'b', 'c', 'd']
+            },
+            answer: { type: 'STRING', enum: ['a', 'b', 'c', 'd'] },
+            chapter: { type: 'STRING' }
+        },
+        required: ['assertion', 'reason', 'answer']
+    },
+    short_2marks: {
+        type: 'OBJECT',
+        properties: { question: { type: 'STRING' }, answer: { type: 'STRING' }, chapter: { type: 'STRING' } },
+        required: ['question', 'answer']
+    },
+    short_3marks: {
+        type: 'OBJECT',
+        properties: { question: { type: 'STRING' }, answer: { type: 'STRING' }, chapter: { type: 'STRING' } },
+        required: ['question', 'answer']
+    },
+    long_answer: {
+        type: 'OBJECT',
+        properties: { question: { type: 'STRING' }, answer: { type: 'STRING' }, chapter: { type: 'STRING' } },
+        required: ['question', 'answer']
+    },
+    case_based: {
+        type: 'OBJECT',
+        properties: {
+            case_study: { type: 'STRING' },
+            sub_questions: {
+                type: 'ARRAY',
+                items: {
+                    type: 'OBJECT',
+                    properties: { question: { type: 'STRING' }, answer: { type: 'STRING' }, marks: { type: 'INTEGER' } },
+                    required: ['question', 'answer']
+                }
+            },
+            chapter: { type: 'STRING' }
+        },
+        required: ['case_study', 'sub_questions']
+    }
+};
+
+// Builds a Gemini responseSchema that only allows the given question type
+// keys, each an array of that type's item shape — nothing else can appear.
+function buildResponseSchema(types) {
+    const properties = {};
+    types.forEach(t => {
+        properties[t] = { type: 'ARRAY', items: ITEM_SCHEMAS[t] || ITEM_SCHEMAS.short_2marks };
+    });
+    return { type: 'OBJECT', properties, required: types };
+}
+
 app.post('/api/generate', async (req, res) => {
     try {
         const { classNum, subject, chapters, questionTypes, singleSlotReq, difficulty, styleGuide } = req.body;
@@ -61,11 +142,12 @@ app.post('/api/generate', async (req, res) => {
         // Customize generation behavior for single slot vs multi-pool
         let generationRules = '';
         let jsonSchema = '';
+        let responseTypes = [];
 
         if (singleSlotReq) {
             // High-speed, focused prompt for populating a single structural slot
             const { type, marks, context } = singleSlotReq;
-            generationRules = `Generate EXACTLY ONE original question of type: "${type}" worth ${marks} marks.
+            generationRules = `Generate EXACTLY ONE original question of type: "${type}" worth ${marks} marks. Do not generate any other question type — only "${type}".
 Context metadata to obey: ${context || 'None'}.`;
             
             const schemaMap = {
@@ -76,7 +158,9 @@ Context metadata to obey: ${context || 'None'}.`;
                 case_based: '"case_based": [{"case_study": "passage", "sub_questions": [{"question": "sub q", "answer": "ans", "marks": 1}], "chapter": "ch"}]',
                 long_answer: '"long_answer": [{"question": "q", "answer": "ans", "chapter": "ch"}]'
             };
-            jsonSchema = schemaMap[type] || schemaMap['short_2marks'];
+            const resolvedType = schemaMap[type] ? type : 'short_2marks';
+            jsonSchema = schemaMap[resolvedType];
+            responseTypes = [resolvedType];
         } else {
             // General bulk pool generation
             const activeTypes = questionTypes || ['mcq', 'short_2marks'];
@@ -98,6 +182,7 @@ Context metadata to obey: ${context || 'None'}.`;
             };
             generationRules = activeTypes.map(t => promptBlocks[t]).join('\n');
             jsonSchema = activeTypes.map(t => schemaBlocks[t]).join(',\n  ');
+            responseTypes = activeTypes;
         }
 
         const prompt = `You are an expert CBSE board paper setter. Generate unique content.
@@ -134,7 +219,16 @@ RESPOND ONLY WITH VALID JSON MATCHING THIS EXACT SCHAPE (NO MARKDOWN CODEBLOCKS)
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         contents: [{ role: 'user', parts: [{ text: prompt }] }],
-                        generationConfig: { responseMimeType: "application/json", temperature: 1.0 }
+                        generationConfig: {
+                            responseMimeType: "application/json",
+                            // Enforced structured output: Gemini can only return the
+                            // exact key(s)/field(s) for the requested question
+                            // type(s) — it can no longer drift into a different
+                            // question shape (e.g. a case-based passage for a
+                            // slot that asked for an MCQ).
+                            responseSchema: buildResponseSchema(responseTypes),
+                            temperature: 1.0
+                        }
                     })
                 });
 
