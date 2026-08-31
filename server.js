@@ -5,6 +5,46 @@ const fetch = require('node-fetch');
 const crypto = require('crypto');
 const path = require('path');
 
+// ============================================================
+// AI PROVIDER CONFIGURATION
+// ============================================================
+
+const AI_PROVIDERS = [
+    {
+        name: 'gemini',
+        key: process.env.GEMINI_API_KEY,
+        models: [
+            'gemini-3.6-flash',
+            'gemini-3.5-flash'
+        ]
+    },
+
+    {
+        name: 'groq',
+        key: process.env.GROQ_API_KEY,
+        models: [
+            'openai/gpt-oss-120b',
+            'openai/gpt-oss-20b'
+        ]
+    },
+
+    {
+        name: 'cerebras',
+        key: process.env.CEREBRAS_API_KEY,
+        models: [
+            'llama-3.3-70b'
+        ]
+    },
+
+    {
+        name: 'openrouter',
+        key: process.env.OPENROUTER_API_KEY,
+        models: [
+            'openrouter/free'
+        ]
+    }
+].filter(provider => provider.key);
+
 const app = express();
 app.use(cors());
 // Raised from 25mb so 2-3 full-resolution phone-camera blueprint photos
@@ -104,14 +144,284 @@ function buildResponseSchema(types) {
     return { type: 'OBJECT', properties, required: types };
 }
 
-app.post('/api/generate', async (req, res) => {
+app.post('/api/generate',
+         // ============================================================
+// GEMINI API
+// ============================================================
+
+async function callGemini(provider, model, prompt, responseTypes) {
+
+    const response = await fetch(
+        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${provider.key.trim()}`,
+        {
+            method: 'POST',
+
+            headers: {
+                'Content-Type': 'application/json'
+            },
+
+            body: JSON.stringify({
+                contents: [
+                    {
+                        role: 'user',
+                        parts: [
+                            {
+                                text: prompt
+                            }
+                        ]
+                    }
+                ],
+
+                generationConfig: {
+                    responseMimeType: 'application/json',
+
+                    responseSchema:
+                        buildResponseSchema(responseTypes),
+
+                    temperature: 1.0
+                }
+            })
+        }
+    );
+
+    if (!response.ok) {
+
+        const errorText = await response.text();
+
+        const error = new Error(
+            `Gemini ${response.status}: ${errorText}`
+        );
+
+        error.status = response.status;
+
+        throw error;
+    }
+
+    const result = await response.json();
+
+    return result.candidates?.[0]?.content?.parts?.[0]?.text;
+}
+         // ============================================================
+// GROQ API
+// ============================================================
+
+async function callGroq(provider, model, prompt) {
+
+    const response = await fetch(
+        'https://api.groq.com/openai/v1/chat/completions',
+        {
+            method: 'POST',
+
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${provider.key.trim()}`
+            },
+
+            body: JSON.stringify({
+                model: model,
+
+                messages: [
+                    {
+                        role: 'user',
+                        content: prompt
+                    }
+                ],
+
+                temperature: 1,
+
+                response_format: {
+                    type: 'json_object'
+                }
+            })
+        }
+    );
+
+    if (!response.ok) {
+
+        const errorText = await response.text();
+
+        const error = new Error(
+            `Groq ${response.status}: ${errorText}`
+        );
+
+        error.status = response.status;
+
+        throw error;
+    }
+
+    const result = await response.json();
+
+    return result.choices?.[0]?.message?.content;
+}
+// ============================================================
+// CEREBRAS API
+// ============================================================
+
+async function callCerebras(provider, model, prompt) {
+
+    const response = await fetch(
+        'https://api.cerebras.ai/v1/chat/completions',
+        {
+            method: 'POST',
+
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${provider.key.trim()}`
+            },
+
+            body: JSON.stringify({
+                model: model,
+
+                messages: [
+                    {
+                        role: 'user',
+                        content: prompt
+                    }
+                ],
+
+                temperature: 1,
+
+                response_format: {
+                    type: 'json_object'
+                }
+            })
+        }
+    );
+
+    if (!response.ok) {
+
+        const errorText = await response.text();
+
+        const error = new Error(
+            `Cerebras ${response.status}: ${errorText}`
+        );
+
+        error.status = response.status;
+
+        throw error;
+    }
+
+    const result = await response.json();
+
+    return result.choices?.[0]?.message?.content;
+}
+// ============================================================
+// OPENROUTER API
+// ============================================================
+
+async function callOpenRouter(provider, model, prompt) {
+
+    const response = await fetch(
+        'https://openrouter.ai/api/v1/chat/completions',
+        {
+            method: 'POST',
+
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${provider.key.trim()}`,
+                'HTTP-Referer': 'https://cbse-question-generator-mfyy.onrender.com/',
+                'X-Title': 'CBSE Question Generator'
+            },
+
+            body: JSON.stringify({
+                model: model,
+
+                messages: [
+                    {
+                        role: 'user',
+                        content: prompt
+                    }
+                ],
+
+                temperature: 1,
+
+                response_format: {
+                    type: 'json_object'
+                }
+            })
+        }
+    );
+
+    if (!response.ok) {
+
+        const errorText = await response.text();
+
+        const error = new Error(
+            `OpenRouter ${response.status}: ${errorText}`
+        );
+
+        error.status = response.status;
+
+        throw error;
+    }
+
+    const result = await response.json();
+
+    return result.choices?.[0]?.message?.content;
+}
+// ============================================================
+// PROVIDER DISPATCHER
+// ============================================================
+
+async function callProvider(
+    provider,
+    model,
+    prompt,
+    responseTypes
+) {
+
+    switch (provider.name) {
+
+        case 'gemini':
+
+            return await callGemini(
+                provider,
+                model,
+                prompt,
+                responseTypes
+            );
+
+        case 'groq':
+
+            return await callGroq(
+                provider,
+                model,
+                prompt
+            );
+
+        case 'cerebras':
+
+            return await callCerebras(
+                provider,
+                model,
+                prompt
+            );
+
+        case 'openrouter':
+
+            return await callOpenRouter(
+                provider,
+                model,
+                prompt
+            );
+
+        default:
+
+            throw new Error(
+                `Unknown AI provider: ${provider.name}`
+            );
+    }
+}
+         async (req, res) => {
     try {
         const { classNum, subject, chapters, questionTypes, singleSlotReq, difficulty, styleGuide } = req.body;
         const apiKey = process.env.GEMINI_API_KEY || process.env.GROQ_API_KEY;
 
-        if (!apiKey) {
-            return res.status(500).json({ error: 'Server Config Error: API key is missing.' });
-        }
+        if (AI_PROVIDERS.length === 0) {
+    return res.status(500).json({
+        error: 'Server Config Error: No AI API keys are configured.'
+    });
+}
 
         if (!classNum || !subject || !chapters || chapters.length === 0) {
             return res.status(400).json({ error: 'Please select class, subject, and chapters.' });
@@ -207,47 +517,150 @@ RESPOND ONLY WITH VALID JSON MATCHING THIS EXACT SCHAPE (NO MARKDOWN CODEBLOCKS)
   ${jsonSchema}
 }`;
 
-        const models = ['gemini-3.6-flash', 'gemini-3.5-flash'];
-        let apiResponse;
-        let successfulModel = '';
-        let lastError = '';
 
-        for (const model of models) {
-            try {
-                apiResponse = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey.trim()}`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        contents: [{ role: 'user', parts: [{ text: prompt }] }],
-                        generationConfig: {
-                            responseMimeType: "application/json",
-                            // Enforced structured output: Gemini can only return the
-                            // exact key(s)/field(s) for the requested question
-                            // type(s) — it can no longer drift into a different
-                            // question shape (e.g. a case-based passage for a
-                            // slot that asked for an MCQ).
-                            responseSchema: buildResponseSchema(responseTypes),
-                            temperature: 1.0
-                        }
-                    })
-                });
+        
+// ============================================================
+// AI PROVIDER FAILOVER
+// ============================================================
 
-                if (apiResponse.ok) {
-                    successfulModel = model;
-                    break;
-                } else {
-                    lastError = await apiResponse.text();
-                }
-            } catch (e) {
-                lastError = e.message;
+let content = null;
+
+let successfulProvider = null;
+let successfulModel = null;
+
+let lastError = null;
+
+
+// Try each provider one by one
+for (const provider of AI_PROVIDERS) {
+
+    console.log(
+        `Trying AI provider: ${provider.name}`
+    );
+
+
+    // Try every model configured for this provider
+    for (const model of provider.models) {
+
+        try {
+
+            console.log(
+                `Trying model: ${provider.name} / ${model}`
+            );
+
+
+            // Call the correct API depending on provider
+            const result = await callProvider(
+                provider,
+                model,
+                prompt,
+                responseTypes
+            );
+
+
+            // If we received content, stop
+            if (result) {
+
+                content = result;
+
+                successfulProvider =
+                    provider.name;
+
+                successfulModel =
+                    model;
+
+
+                console.log(
+                    `SUCCESS: ${provider.name} / ${model}`
+                );
+
+                break;
             }
-        }
 
-        if (!apiResponse || !apiResponse.ok) {
-            return res.status(500).json({ error: `AI Generation failed. Details: ${lastError}` });
-        }
+        } catch (error) {
 
-        const result = await apiResponse.json();
+            lastError = error;
+
+
+            console.error(
+                `FAILED: ${provider.name} / ${model}`
+            );
+
+            console.error(
+                error.message
+            );
+
+
+            // IMPORTANT:
+            // Do NOT return an error here.
+            //
+            // Instead continue to the next model/provider.
+
+            continue;
+        }
+    }
+
+
+    // If a provider succeeded,
+    // stop trying other providers.
+    if (content) {
+        break;
+    }
+}
+
+
+// ============================================================
+// ALL PROVIDERS FAILED
+// ============================================================
+
+if (!content) {
+
+    console.error(
+        'ALL AI PROVIDERS FAILED'
+    );
+
+    console.error(
+        lastError?.message
+    );
+
+
+    return res.status(503).json({
+
+        error:
+            'All AI providers are temporarily unavailable. Please try again later.'
+
+    });
+}
+
+// ============================================================
+// CLEAN AI RESPONSE
+// ============================================================
+
+content = content
+    .replace(/```json\s*/gi, '')
+    .replace(/```\s*/gi, '')
+    .trim();
+
+
+const firstBrace = content.indexOf('{');
+const lastBrace = content.lastIndexOf('}');
+
+
+if (firstBrace !== -1 && lastBrace !== -1) {
+
+    content = content.substring(
+        firstBrace,
+        lastBrace + 1
+    );
+}
+
+
+const questions = JSON.parse(content);
+
+console.log(
+    `Question generated using ${successfulProvider} / ${successfulModel}`
+);
+
         let content = result.candidates?.[0]?.content?.parts?.[0]?.text;
 
         if (!content) {
