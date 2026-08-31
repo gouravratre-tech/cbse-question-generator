@@ -171,8 +171,41 @@ select:focus { outline: none; border-color: var(--pri); }
 
 .footer { text-align: center; padding: 1.5rem; color: var(--text-sec); font-size: 0.8rem; margin-top: 2rem; border-top: 1px solid var(--border); }
 
+/* Advanced Tools Panel: blueprint uploader, pattern PDF uploader, logo uploader */
+.advanced-tools-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 1.25rem; }
+.tool-card { background: #F8FAFC; border: 1px solid var(--border); border-radius: 10px; padding: 1rem 1.1rem; display: flex; flex-direction: column; gap: 0.6rem; }
+.tool-card-head { font-weight: 700; font-size: 0.9rem; display: flex; align-items: center; gap: 0.5rem; color: var(--pri-dark); }
+.tool-card-desc { font-size: 0.78rem; color: var(--text-sec); line-height: 1.4; margin: 0; }
+.tool-card input[type="file"] { font-size: 0.78rem; }
+.tool-status { font-size: 0.75rem; color: var(--text-muted); min-height: 1em; }
+.tool-status-ok { color: var(--success); font-weight: 600; }
+.tool-status-err { color: var(--danger); font-weight: 600; }
+.logo-preview-wrap { display: flex; align-items: center; gap: 0.75rem; margin-top: 0.3rem; }
+.logo-preview-wrap img { max-height: 60px; max-width: 120px; object-fit: contain; border: 1px solid var(--border); border-radius: 6px; background: #fff; padding: 4px; }
+
+/* Edit Question Modal */
+.modal-box-wide { width: 620px; }
+.modal-footer { padding: 1rem 1.5rem; background: #F8FAFC; border-top: 1px solid var(--border); display: flex; justify-content: flex-end; gap: 0.6rem; }
+#editModalBody label { display: block; font-weight: 600; font-size: 0.8rem; color: var(--text-sec); margin: 0.7rem 0 0.3rem; }
+#editModalBody label:first-child { margin-top: 0; }
+#editModalBody textarea, #editModalBody input, #editModalBody select { width: 100%; padding: 0.6rem 0.8rem; border: 1px solid var(--border); border-radius: 6px; font-size: 0.85rem; font-family: inherit; }
+#editModalBody textarea { resize: vertical; }
+.edit-grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 0.7rem; }
+.edit-subq-row { display: grid; grid-template-columns: auto 1fr 1fr; gap: 0.5rem; align-items: start; margin-bottom: 0.5rem; }
+.edit-subq-label { font-weight: 700; font-size: 0.8rem; padding-top: 0.6rem; }
+
+/* Inline edit icon shown on-screen in the final compiled paper (hidden on print) */
+.edit-inline-btn { background: var(--pri-light); border: 1px solid #C7D2FE; color: var(--pri); border-radius: 6px; width: 26px; height: 26px; flex-shrink: 0; cursor: pointer; font-size: 0.75rem; }
+.edit-inline-btn:hover { background: var(--pri); color: #fff; }
+
+/* Logo header layout in the compiled board paper */
+.board-header-logo-row { display: flex; align-items: center; gap: 1rem; justify-content: center; margin-bottom: 0.4rem; }
+.board-header-logo { max-height: 70px; max-width: 100px; object-fit: contain; }
+.board-header-titles h2, .board-header-titles h3 { margin-bottom: 0.2rem; }
+
 /* Print Media Directives */
 @media print {
+    .no-print { display: none !important; }
     .header, .config-panel, .builder-workspace, .preview-actions, .footer, .modal-overlay { display: none !important; }
     body { background: #fff; color: #000; }
     .main-content { margin: 0; padding: 0; max-width: 100%; }
