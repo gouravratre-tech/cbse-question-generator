@@ -182,6 +182,13 @@ const blueprints = {
     }
 };
 
+// Ensure every slot across every blueprint (built-in and any future AI-uploaded
+// blueprint) carries an Internal OR Choice option, regardless of question type
+// (MCQ, Assertion-Reason, Short/Long Answer, Case-Based, etc.)
+Object.values(blueprints).forEach(bp => {
+    (bp.slots || []).forEach(slot => { slot.optional = true; });
+});
+
 // State Store
 let activeDraft = {}; // Map of slot number -> assigned question node
 let activeORs = {};   // Map of slot number -> assigned OR alternative question node
@@ -226,8 +233,21 @@ blueprintSelect.addEventListener('change', setupBlueprintDraftUI);
 btnFetchPool.addEventListener('click', generatePool);
 btnAutoFill.addEventListener('click', autoFillEmptySlots);
 
+const MAX_BLUEPRINT_IMAGES = 6; // plenty of headroom for the "2-3 images" typical use case
 blueprintImageInput.addEventListener('change', () => {
-    btnAnalyzeBlueprint.disabled = !blueprintImageInput.files.length;
+    const count = blueprintImageInput.files.length;
+    if (count > MAX_BLUEPRINT_IMAGES) {
+        alert(`Please select at most ${MAX_BLUEPRINT_IMAGES} images at a time (you selected ${count}).`);
+        blueprintImageInput.value = '';
+        btnAnalyzeBlueprint.disabled = true;
+        blueprintUploadStatus.textContent = '';
+        return;
+    }
+    btnAnalyzeBlueprint.disabled = !count;
+    blueprintUploadStatus.textContent = count
+        ? `${count} image${count > 1 ? 's' : ''} selected — click "Analyze & Build Blueprint" when ready.`
+        : '';
+    blueprintUploadStatus.className = 'tool-status';
 });
 btnAnalyzeBlueprint.addEventListener('click', analyzeBlueprintImage);
 
@@ -297,6 +317,8 @@ async function analyzeBlueprintImage() {
         if (data.success && data.blueprint && Array.isArray(data.blueprint.slots) && data.blueprint.slots.length) {
             const key = `Custom-Uploaded-${Date.now()}`;
             blueprints[key] = data.blueprint;
+            // Every slot gets an Internal OR Choice option too, same as built-in blueprints
+            (blueprints[key].slots || []).forEach(slot => { slot.optional = true; });
 
             const opt = document.createElement('option');
             opt.value = key;
@@ -695,7 +717,7 @@ function clearSlot(slotNum) {
 }
 
 // 3. Auto-Generate matching questions for single slot instantly
-async function triggerImmediateAIForSlot(slotNum) {
+async function triggerImmediateAIForSlot(slotNum, isOR = false) {
     const cls = classSelect.value;
     const sub = subjectSelect.value;
     const chs = Array.from(document.querySelectorAll('.chk-ch:checked')).map(chk => chk.value);
@@ -711,12 +733,14 @@ async function triggerImmediateAIForSlot(slotNum) {
     if (!slot) return;
 
     const card = document.getElementById(`slot_card_${slotNum}`);
-    card.innerHTML = `
-        <div class="loader-panel">
-            <div class="spinner"><i class="fas fa-circle-notch fa-spin"></i></div>
-            <p style="font-size:0.75rem; color:var(--text-muted)">Generating dedicated question...</p>
-        </div>
-    `;
+    if (!isOR && card) {
+        card.innerHTML = `
+            <div class="loader-panel">
+                <div class="spinner"><i class="fas fa-circle-notch fa-spin"></i></div>
+                <p style="font-size:0.75rem; color:var(--text-muted)">Generating dedicated question...</p>
+            </div>
+        `;
+    }
 
     try {
         const res = await fetch('/api/generate', {
@@ -729,7 +753,9 @@ async function triggerImmediateAIForSlot(slotNum) {
                 singleSlotReq: {
                     type: slot.type,
                     marks: slot.marks,
-                    context: `Specific context for Board Exam Question ${slotNum} on subject discipline ${slot.subject || 'General'}`
+                    context: isOR
+                        ? `Internal OR Choice alternative for Board Exam Question ${slotNum} on subject discipline ${slot.subject || 'General'} — must test the same skill/marks but a DIFFERENT concept or chapter angle than the main question so it is a genuine alternative choice.`
+                        : `Specific context for Board Exam Question ${slotNum} on subject discipline ${slot.subject || 'General'}`
                 },
                 difficulty: difficultySelect.value,
                 styleGuide: styleGuideText
@@ -739,7 +765,11 @@ async function triggerImmediateAIForSlot(slotNum) {
         if (data.success && data.questions) {
             const arr = data.questions[slot.type] || [];
             if (arr.length > 0) {
-                activeDraft[slotNum] = arr[0];
+                if (isOR) {
+                    activeORs[slotNum] = arr[0];
+                } else {
+                    activeDraft[slotNum] = arr[0];
+                }
             } else {
                 throw new Error('Empty API collection returned.');
             }
@@ -749,27 +779,38 @@ async function triggerImmediateAIForSlot(slotNum) {
     } catch (e) {
         alert(`Slot Auto-Generation failed: ${e.message}. Attempting retry with fallback.`);
     } finally {
-        renderSlotState(card, slot);
+        if (card) renderSlotState(card, slot);
         updateProgress();
     }
 }
 
-// Auto-fill all remaining empty slots in sequence
+// Auto-fill all remaining empty slots in sequence, including their Internal OR
+// Choice alternative for every slot that supports one (now every slot does)
 async function autoFillEmptySlots() {
     const bpKey = blueprintSelect.value;
     const bp = blueprints[bpKey];
     const emptySlots = bp.slots.filter(s => !activeDraft[s.num]);
+    const emptyORSlots = bp.slots.filter(s => s.optional && activeDraft[s.num] && !activeORs[s.num]);
 
-    if (!emptySlots.length) {
-        alert('All slots are populated!');
+    if (!emptySlots.length && !emptyORSlots.length) {
+        alert('All slots — including OR alternatives — are populated!');
         return;
     }
 
-    if (!confirm(`Are you sure you want to let Gemini auto-fill the remaining ${emptySlots.length} blueprint slots?`)) return;
+    const total = emptySlots.length + emptyORSlots.length;
+    if (!confirm(`Are you sure you want to let Gemini auto-fill the remaining ${total} slots (main questions + OR alternatives)?`)) return;
 
     btnAutoFill.disabled = true;
     for (const slot of emptySlots) {
-        await triggerImmediateAIForSlot(slot.num);
+        await triggerImmediateAIForSlot(slot.num, false);
+    }
+    // Second pass: fill in any missing OR alternatives (including for slots
+    // that were just filled above)
+    const stillNeedOR = bp.slots.filter(s => s.optional && activeDraft[s.num] && !activeORs[s.num]);
+    for (const slot of stillNeedOR) {
+        await triggerImmediateAIForSlot(slot.num, true);
+        const card = document.getElementById(`slot_card_${slot.num}`);
+        if (card) renderSlotState(card, slot);
     }
     btnAutoFill.disabled = false;
     updateProgress();
