@@ -7,7 +7,9 @@ const path = require('path');
 
 const app = express();
 app.use(cors());
-app.use(express.json({ limit: '25mb' }));
+// Raised from 25mb so 2-3 full-resolution phone-camera blueprint photos
+// (base64-encoded, which adds ~33% overhead) don't get rejected mid-upload.
+app.use(express.json({ limit: '50mb' }));
 app.use(express.static(path.join(__dirname)));
 
 app.get('/', (req, res) => {
