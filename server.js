@@ -93,6 +93,21 @@ function historyKey(classNum, subject, chapters) {
 // GEMINI RESPONSE SCHEMAS
 // ============================================================
 
+const IMAGE_FIELDS = {
+    imageRequired: {
+        type: 'BOOLEAN'
+    },
+
+    imageType: {
+        type: 'STRING'
+    },
+
+    imageDescription: {
+        type: 'STRING'
+    }
+};
+
+
 const ITEM_SCHEMAS = {
 
     mcq: {
@@ -108,23 +123,10 @@ const ITEM_SCHEMAS = {
                 type: 'OBJECT',
 
                 properties: {
-
-                    a: {
-                        type: 'STRING'
-                    },
-
-                    b: {
-                        type: 'STRING'
-                    },
-
-                    c: {
-                        type: 'STRING'
-                    },
-
-                    d: {
-                        type: 'STRING'
-                    }
-
+                    a: { type: 'STRING' },
+                    b: { type: 'STRING' },
+                    c: { type: 'STRING' },
+                    d: { type: 'STRING' }
                 },
 
                 required: [
@@ -137,6 +139,7 @@ const ITEM_SCHEMAS = {
 
             answer: {
                 type: 'STRING',
+
                 enum: [
                     'a',
                     'b',
@@ -147,20 +150,22 @@ const ITEM_SCHEMAS = {
 
             chapter: {
                 type: 'STRING'
-            }
+            },
+
+            ...IMAGE_FIELDS
 
         },
 
         required: [
             'question',
             'options',
-            'answer'
+            'answer',
+            'imageRequired'
         ]
     },
 
 
     assertion_reason: {
-
         type: 'OBJECT',
 
         properties: {
@@ -174,27 +179,13 @@ const ITEM_SCHEMAS = {
             },
 
             options: {
-
                 type: 'OBJECT',
 
                 properties: {
-
-                    a: {
-                        type: 'STRING'
-                    },
-
-                    b: {
-                        type: 'STRING'
-                    },
-
-                    c: {
-                        type: 'STRING'
-                    },
-
-                    d: {
-                        type: 'STRING'
-                    }
-
+                    a: { type: 'STRING' },
+                    b: { type: 'STRING' },
+                    c: { type: 'STRING' },
+                    d: { type: 'STRING' }
                 },
 
                 required: [
@@ -218,7 +209,9 @@ const ITEM_SCHEMAS = {
 
             chapter: {
                 type: 'STRING'
-            }
+            },
+
+            ...IMAGE_FIELDS
 
         },
 
@@ -226,13 +219,13 @@ const ITEM_SCHEMAS = {
             'assertion',
             'reason',
             'options',
-            'answer'
+            'answer',
+            'imageRequired'
         ]
     },
 
 
     short_2marks: {
-
         type: 'OBJECT',
 
         properties: {
@@ -247,19 +240,21 @@ const ITEM_SCHEMAS = {
 
             chapter: {
                 type: 'STRING'
-            }
+            },
+
+            ...IMAGE_FIELDS
 
         },
 
         required: [
             'question',
-            'answer'
+            'answer',
+            'imageRequired'
         ]
     },
 
 
     short_3marks: {
-
         type: 'OBJECT',
 
         properties: {
@@ -274,19 +269,21 @@ const ITEM_SCHEMAS = {
 
             chapter: {
                 type: 'STRING'
-            }
+            },
+
+            ...IMAGE_FIELDS
 
         },
 
         required: [
             'question',
-            'answer'
+            'answer',
+            'imageRequired'
         ]
     },
 
 
     long_answer: {
-
         type: 'OBJECT',
 
         properties: {
@@ -301,19 +298,21 @@ const ITEM_SCHEMAS = {
 
             chapter: {
                 type: 'STRING'
-            }
+            },
+
+            ...IMAGE_FIELDS
 
         },
 
         required: [
             'question',
-            'answer'
+            'answer',
+            'imageRequired'
         ]
     },
 
 
     case_based: {
-
         type: 'OBJECT',
 
         properties: {
@@ -350,18 +349,23 @@ const ITEM_SCHEMAS = {
                         'question',
                         'answer'
                     ]
+
                 }
+
             },
 
             chapter: {
                 type: 'STRING'
-            }
+            },
+
+            ...IMAGE_FIELDS
 
         },
 
         required: [
             'case_study',
-            'sub_questions'
+            'sub_questions',
+            'imageRequired'
         ]
     }
 
@@ -935,32 +939,27 @@ ${prevQuestions
             let responseTypes = [];
 
 
-            const schemaMap = {
+                const schemaMap = {
 
-                mcq:
-                    '"mcq":[{"question":"q","options":{"a":"o1","b":"o2","c":"o3","d":"o4"},"answer":"a","chapter":"ch"}]',
+    mcq:
+        '"mcq":[{"question":"q","options":{"a":"o1","b":"o2","c":"o3","d":"o4"},"answer":"a","chapter":"ch","imageRequired":false,"imageType":"","imageDescription":""}]',
 
+    assertion_reason:
+        '"assertion_reason":[{"assertion":"A","reason":"R","options":{"a":"Both A and R are true and R is the correct explanation of A","b":"Both A and R are true but R is not the correct explanation of A","c":"A is true but R is false","d":"A is false but R is true"},"answer":"a","chapter":"ch","imageRequired":false,"imageType":"","imageDescription":""}]',
 
-                assertion_reason:
-                    '"assertion_reason":[{"assertion":"A","reason":"R","options":{"a":"Both A and R are true and R is the correct explanation of A","b":"Both A and R are true but R is not the correct explanation of A","c":"A is true but R is false","d":"A is false but R is true"},"answer":"a","chapter":"ch"}]',
+    short_2marks:
+        '"short_2marks":[{"question":"q","answer":"ans","chapter":"ch","imageRequired":false,"imageType":"","imageDescription":""}]',
 
+    short_3marks:
+        '"short_3marks":[{"question":"q","answer":"ans","chapter":"ch","imageRequired":false,"imageType":"","imageDescription":""}]',
 
-                short_2marks:
-                    '"short_2marks":[{"question":"q","answer":"ans","chapter":"ch"}]',
+    case_based:
+        '"case_based":[{"case_study":"passage","sub_questions":[{"question":"sub q","answer":"ans","marks":1}],"chapter":"ch","imageRequired":false,"imageType":"","imageDescription":""}]',
 
+    long_answer:
+        '"long_answer":[{"question":"q","answer":"ans","chapter":"ch","imageRequired":false,"imageType":"","imageDescription":""}]'
 
-                short_3marks:
-                    '"short_3marks":[{"question":"q","answer":"ans","chapter":"ch"}]',
-
-
-                case_based:
-                    '"case_based":[{"case_study":"passage","sub_questions":[{"question":"sub q","answer":"ans","marks":1}],"chapter":"ch"}]',
-
-
-                long_answer:
-                    '"long_answer":[{"question":"q","answer":"ans","chapter":"ch"}]'
-
-            };
+};
 
 
             // ------------------------------------------------
@@ -1149,7 +1148,7 @@ ${styleBlock}
 
 ${avoidBlock}
 
-IMPORTANT FORMATTING RULES:
+IMPORTANT QUESTION DESIGN RULES:
 
 1. Return ONLY valid JSON.
 2. Do NOT use markdown.
@@ -1161,6 +1160,69 @@ IMPORTANT FORMATTING RULES:
 8. Questions must be appropriate for CBSE.
 9. Answers must be factually correct.
 10. Do not repeat previous questions.
+
+QUESTION DESIGN:
+
+11. Do NOT force numerical, calculation-based, formula-based, practical, or image-based questions into every question set.
+
+12. Use numerical or practical questions ONLY when the selected chapter genuinely contains calculations, formulas, experiments, data interpretation, measurements, or practical applications.
+
+13. For theory-oriented chapters, prefer conceptual, analytical, reasoning, explanation, comparison, cause-effect, interpretation and competency-based questions.
+
+14. NEVER create a numerical question just to make a question application-based.
+
+15. Numerical/practical questions are OPTIONAL.
+
+16. Image-based questions are OPTIONAL.
+
+17. NEVER add an image merely for decoration.
+
+18. Use an image ONLY when it genuinely helps assess the concept.
+
+19. Appropriate image-based questions may use:
+    - scientific diagrams
+    - biological structures
+    - chemical structures
+    - laboratory apparatus
+    - experimental setups
+    - electrical circuits
+    - ray diagrams
+    - graphs
+    - charts
+    - maps
+    - geometrical figures
+    - data representations
+    - flow diagrams
+    - historical/source images
+    - geographical diagrams
+
+20. If an image does not improve the question, set imageRequired to false.
+
+21. If an image genuinely improves assessment, set imageRequired to true.
+
+22. When imageRequired is true, imageType must identify the visual:
+    diagram, graph, map, circuit, structure, experiment, chart, figure, or other.
+
+23. When imageRequired is true, imageDescription must precisely describe the required educational image.
+
+24. The image description must contain enough information for a later image-generation system to create an accurate educational visual.
+
+25. Do not claim that an image is from NCERT or a textbook unless the actual source image has been provided.
+
+26. Image-based questions may be conceptual, analytical, numerical, practical, or competency-based depending on the chapter.
+
+27. A competency-based question does NOT have to be numerical.
+
+28. Do not force any particular question format.
+
+29. Match the question format to the actual content and learning outcome of the chapter.
+
+30. Maintain variety between questions.
+
+31. The priority is:
+    chapter relevance > learning outcome > accuracy > question quality > variety.
+
+32. NEVER invent formulas, experiments, diagrams, numerical situations, or visual contexts unrelated to the selected chapter.
 
 REQUIRED JSON STRUCTURE:
 
