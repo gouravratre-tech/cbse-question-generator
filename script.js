@@ -187,6 +187,9 @@ let activeDraft = {}; // Map of slot number -> assigned question node
 let activeORs = {};   // Map of slot number -> assigned OR alternative question node
 let currentPool = []; // Array of generated questions currently in pool
 let temporaryQToAllocate = null;
+let uploadedLogoDataUrl = 'assets/mpower-logo.jpeg'; // Default bundled logo for final paper header (replaceable/removable)
+let styleGuideText = '';        // Extracted style guide from uploaded sample paper
+let editModalContext = null;    // { slotNum, isOR }
 
 // DOM Controls
 const classSelect = document.getElementById('classSelect');
@@ -201,6 +204,20 @@ const blueprintSlotMatrix = document.getElementById('blueprintSlotMatrix');
 const paperPreviewSection = document.getElementById('paperPreviewSection');
 const boardPaper = document.getElementById('boardPaper');
 const boardAnswers = document.getElementById('boardAnswers');
+const difficultySelect = document.getElementById('difficultySelect');
+
+const blueprintImageInput = document.getElementById('blueprintImageInput');
+const btnAnalyzeBlueprint = document.getElementById('btnAnalyzeBlueprint');
+const blueprintUploadStatus = document.getElementById('blueprintUploadStatus');
+
+const patternPdfInput = document.getElementById('patternPdfInput');
+const btnAnalyzePattern = document.getElementById('btnAnalyzePattern');
+const patternUploadStatus = document.getElementById('patternUploadStatus');
+
+const logoInput = document.getElementById('logoInput');
+const logoPreviewWrap = document.getElementById('logoPreviewWrap');
+const logoPreviewImg = document.getElementById('logoPreviewImg');
+const btnRemoveLogo = document.getElementById('btnRemoveLogo');
 
 // Initialize events
 classSelect.addEventListener('change', populateSubjects);
@@ -208,6 +225,152 @@ subjectSelect.addEventListener('change', populateChapters);
 blueprintSelect.addEventListener('change', setupBlueprintDraftUI);
 btnFetchPool.addEventListener('click', generatePool);
 btnAutoFill.addEventListener('click', autoFillEmptySlots);
+
+blueprintImageInput.addEventListener('change', () => {
+    btnAnalyzeBlueprint.disabled = !blueprintImageInput.files.length;
+});
+btnAnalyzeBlueprint.addEventListener('click', analyzeBlueprintImage);
+
+patternPdfInput.addEventListener('change', () => {
+    btnAnalyzePattern.disabled = !patternPdfInput.files.length;
+});
+btnAnalyzePattern.addEventListener('click', analyzePatternFile);
+
+logoInput.addEventListener('change', handleLogoUpload);
+btnRemoveLogo.addEventListener('click', () => {
+    uploadedLogoDataUrl = null;
+    logoInput.value = '';
+    logoPreviewWrap.style.display = 'none';
+    if (paperPreviewSection.style.display !== 'none') compileBoardPaper();
+});
+
+// Initialize logo preview with the bundled default on page load
+if (uploadedLogoDataUrl) {
+    logoPreviewImg.src = uploadedLogoDataUrl;
+    logoPreviewWrap.style.display = 'flex';
+}
+
+// Helper: read a File object into a base64 string (without the data: prefix) + its data URL
+function readFileAsBase64(file) {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+            const dataUrl = reader.result;
+            const base64 = dataUrl.split(',')[1];
+            resolve({ dataUrl, base64 });
+        };
+        reader.onerror = () => reject(new Error('Could not read the selected file.'));
+        reader.readAsDataURL(file);
+    });
+}
+
+// Upload & AI-analyze one or more blueprint images -> builds a new selectable blueprint template
+async function analyzeBlueprintImage() {
+    const files = Array.from(blueprintImageInput.files || []);
+    if (!files.length) return;
+
+    btnAnalyzeBlueprint.disabled = true;
+    btnAnalyzeBlueprint.querySelector('.loader-icon').style.display = 'inline-block';
+    btnAnalyzeBlueprint.querySelector('.action-icon').style.display = 'none';
+    blueprintUploadStatus.textContent = files.length > 1
+        ? `Reading ${files.length} blueprint pages with AI...`
+        : 'Reading blueprint image with AI...';
+    blueprintUploadStatus.className = 'tool-status';
+
+    try {
+        const images = await Promise.all(files.map(async (file) => {
+            const { base64 } = await readFileAsBase64(file);
+            return { base64, mimeType: file.type || 'image/jpeg' };
+        }));
+
+        const res = await fetch('/api/analyze-blueprint', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                images,
+                classNum: classSelect.value,
+                subject: subjectSelect.value
+            })
+        });
+        const data = await res.json();
+
+        if (data.success && data.blueprint && Array.isArray(data.blueprint.slots) && data.blueprint.slots.length) {
+            const key = `Custom-Uploaded-${Date.now()}`;
+            blueprints[key] = data.blueprint;
+
+            const opt = document.createElement('option');
+            opt.value = key;
+            opt.textContent = `${data.blueprint.title || 'Uploaded Blueprint'} (${data.blueprint.slots.length} Qs)`;
+            blueprintSelect.appendChild(opt);
+            blueprintSelect.value = key;
+            setupBlueprintDraftUI();
+
+            blueprintUploadStatus.textContent = `✓ Blueprint built: "${data.blueprint.title || key}" — now selected above.`;
+            blueprintUploadStatus.classList.add('tool-status-ok');
+        } else {
+            throw new Error(data.error || 'Could not extract a valid blueprint from these images.');
+        }
+    } catch (e) {
+        blueprintUploadStatus.textContent = `✗ ${e.message}`;
+        blueprintUploadStatus.classList.add('tool-status-err');
+    } finally {
+        btnAnalyzeBlueprint.disabled = false;
+        btnAnalyzeBlueprint.querySelector('.loader-icon').style.display = 'none';
+        btnAnalyzeBlueprint.querySelector('.action-icon').style.display = 'inline-block';
+    }
+}
+
+// Upload & AI-analyze a sample paper (PDF/image) -> extracts a reusable style guide
+async function analyzePatternFile() {
+    const file = patternPdfInput.files[0];
+    if (!file) return;
+
+    btnAnalyzePattern.disabled = true;
+    btnAnalyzePattern.querySelector('.loader-icon').style.display = 'inline-block';
+    btnAnalyzePattern.querySelector('.action-icon').style.display = 'none';
+    patternUploadStatus.textContent = 'Studying sample paper pattern with AI...';
+    patternUploadStatus.className = 'tool-status';
+
+    try {
+        const { base64 } = await readFileAsBase64(file);
+        const res = await fetch('/api/analyze-pattern', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ fileBase64: base64, mimeType: file.type || 'application/pdf' })
+        });
+        const data = await res.json();
+
+        if (data.success && data.styleGuide) {
+            styleGuideText = data.styleGuide;
+            patternUploadStatus.textContent = `✓ Pattern captured. New questions will now match this paper's style.`;
+            patternUploadStatus.classList.add('tool-status-ok');
+        } else {
+            throw new Error(data.error || 'Could not analyze this sample paper.');
+        }
+    } catch (e) {
+        patternUploadStatus.textContent = `✗ ${e.message}`;
+        patternUploadStatus.classList.add('tool-status-err');
+    } finally {
+        btnAnalyzePattern.disabled = false;
+        btnAnalyzePattern.querySelector('.loader-icon').style.display = 'none';
+        btnAnalyzePattern.querySelector('.action-icon').style.display = 'inline-block';
+    }
+}
+
+// Upload a logo image for the final paper header
+async function handleLogoUpload() {
+    const file = logoInput.files[0];
+    if (!file) return;
+    try {
+        const { dataUrl } = await readFileAsBase64(file);
+        uploadedLogoDataUrl = dataUrl;
+        logoPreviewImg.src = dataUrl;
+        logoPreviewWrap.style.display = 'flex';
+        if (paperPreviewSection.style.display !== 'none') compileBoardPaper();
+    } catch (e) {
+        alert('Could not load that logo image. Please try a different file.');
+    }
+}
 
 function populateSubjects() {
     const cls = classSelect.value;
@@ -352,6 +515,8 @@ function renderSlotState(card, slot) {
                     ` : ''}
 
                     <div class="slot-assigned-actions">
+                        <button class="btn btn-outline btn-sm" onclick="openEditModal(${slot.num}, false)"><i class="fas fa-edit"></i> Edit Question</button>
+                        ${hasOrAssigned ? `<button class="btn btn-outline btn-sm" onclick="openEditModal(${slot.num}, true)"><i class="fas fa-edit"></i> Edit OR</button>` : ''}
                         <button class="btn btn-outline btn-sm" onclick="clearSlot(${slot.num})"><i class="fas fa-times"></i> Clear Slot</button>
                     </div>
                 </div>
@@ -377,7 +542,10 @@ async function generatePool() {
         const res = await fetch('/api/generate', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ classNum: cls, subject: sub, chapters: chs, questionTypes: [type] })
+            body: JSON.stringify({
+                classNum: cls, subject: sub, chapters: chs, questionTypes: [type],
+                difficulty: difficultySelect.value, styleGuide: styleGuideText
+            })
         });
         const data = await res.json();
         
@@ -562,7 +730,9 @@ async function triggerImmediateAIForSlot(slotNum) {
                     type: slot.type,
                     marks: slot.marks,
                     context: `Specific context for Board Exam Question ${slotNum} on subject discipline ${slot.subject || 'General'}`
-                }
+                },
+                difficulty: difficultySelect.value,
+                styleGuide: styleGuideText
             })
         });
         const data = await res.json();
@@ -644,8 +814,18 @@ function compileBoardPaper() {
     
     // Header compiler
     let paperHTML = `
+        ${uploadedLogoDataUrl ? `
+        <div class="board-header-logo-row">
+            <img src="${uploadedLogoDataUrl}" alt="Institute Logo" class="board-header-logo">
+            <div class="board-header-titles">
+                <h2>CENTRAL BOARD OF SECONDARY EDUCATION</h2>
+                <h3>PRACTICE QUESTION PAPER (2025-26)</h3>
+            </div>
+        </div>
+        ` : `
         <h2>CENTRAL BOARD OF SECONDARY EDUCATION</h2>
         <h3>PRACTICE QUESTION PAPER (2025-26)</h3>
+        `}
         <div class="board-meta">
             <span>Subject: ${subjectSelect.value}</span>
             <span>Max Marks: 80</span>
@@ -682,6 +862,7 @@ function compileBoardPaper() {
             if (q) {
                 paperHTML += `<div class="board-q-item"><div class="board-q-text">`;
                 paperHTML += `<span class="board-q-num">${slot.num}.</span>`;
+                paperHTML += `<button class="no-print edit-inline-btn" onclick="openEditModal(${slot.num}, false)" title="Edit this question"><i class="fas fa-edit"></i></button>`;
                 
                 // Content compilation
                 paperHTML += `<div class="board-q-val">${formatContent(q.question || q.assertion || q.case_study)}`;
@@ -743,6 +924,7 @@ function compileBoardPaper() {
                     paperHTML += `<div class="board-or-divider">OR</div>`;
                     paperHTML += `<div class="board-q-item"><div class="board-q-text">`;
                     paperHTML += `<span class="board-q-num">${slot.num}.</span>`;
+                    paperHTML += `<button class="no-print edit-inline-btn" onclick="openEditModal(${slot.num}, true)" title="Edit this OR alternative"><i class="fas fa-edit"></i></button>`;
                     paperHTML += `<div class="board-q-val">${formatContent(o.question || o.assertion || o.case_study)}`;
                     
                     if (slot.type === 'case_based') {
@@ -789,3 +971,126 @@ document.getElementById('btnToggleAnswers').addEventListener('click', () => {
 document.getElementById('btnPrintPaper').addEventListener('click', () => {
     window.print();
 });
+
+// ===== Edit Question Modal (works for draft slots AND the final compiled paper) =====
+function openEditModal(slotNum, isOR) {
+    const bpKey = blueprintSelect.value;
+    const bp = blueprints[bpKey];
+    const slot = bp?.slots.find(s => s.num === slotNum);
+    const q = isOR ? activeORs[slotNum] : activeDraft[slotNum];
+    if (!slot || !q) return;
+
+    editModalContext = { slotNum, isOR, type: slot.type };
+    document.getElementById('editModalSlotLabel').textContent = `Q${slotNum}${isOR ? ' (OR Alternative)' : ''} — ${slot.type.replace('_',' ').toUpperCase()}`;
+
+    const body = document.getElementById('editModalBody');
+    const esc = (s) => (s || '').toString();
+
+    if (slot.type === 'mcq') {
+        body.innerHTML = `
+            <label>Question Text</label>
+            <textarea id="ef_question" rows="3">${esc(q.question)}</textarea>
+            <div class="edit-grid-2">
+                <div><label>Option (a)</label><input id="ef_opt_a" value="${esc(q.options?.a)}"></div>
+                <div><label>Option (b)</label><input id="ef_opt_b" value="${esc(q.options?.b)}"></div>
+                <div><label>Option (c)</label><input id="ef_opt_c" value="${esc(q.options?.c)}"></div>
+                <div><label>Option (d)</label><input id="ef_opt_d" value="${esc(q.options?.d)}"></div>
+            </div>
+            <label>Correct Answer</label>
+            <select id="ef_answer">
+                ${['a','b','c','d'].map(o => `<option value="${o}" ${q.answer === o ? 'selected' : ''}>(${o})</option>`).join('')}
+            </select>
+        `;
+    } else if (slot.type === 'assertion_reason') {
+        body.innerHTML = `
+            <label>Assertion (A)</label>
+            <textarea id="ef_assertion" rows="2">${esc(q.assertion)}</textarea>
+            <label>Reason (R)</label>
+            <textarea id="ef_reason" rows="2">${esc(q.reason)}</textarea>
+            <label>Correct Answer</label>
+            <select id="ef_answer">
+                <option value="a" ${q.answer==='a'?'selected':''}>(a) Both A and R are true and R is the correct explanation of A</option>
+                <option value="b" ${q.answer==='b'?'selected':''}>(b) Both A and R are true but R is not the correct explanation of A</option>
+                <option value="c" ${q.answer==='c'?'selected':''}>(c) A is true but R is false</option>
+                <option value="d" ${q.answer==='d'?'selected':''}>(d) A is false but R is true</option>
+            </select>
+        `;
+    } else if (slot.type === 'case_based') {
+        const subs = q.sub_questions || [];
+        body.innerHTML = `
+            <label>Case Study / Stimulus Passage</label>
+            <textarea id="ef_case_study" rows="5">${esc(q.case_study)}</textarea>
+            <label style="margin-top:0.75rem;">Sub-Questions</label>
+            <div id="ef_subq_list">
+                ${subs.map((sq, i) => `
+                    <div class="edit-subq-row">
+                        <span class="edit-subq-label">${['(i)','(ii)','(iii)','(iv)'][i] || `(${i+1})`}</span>
+                        <textarea class="ef_subq_q" rows="2" placeholder="Sub-question text">${esc(sq.question)}</textarea>
+                        <textarea class="ef_subq_a" rows="2" placeholder="Answer">${esc(sq.answer)}</textarea>
+                    </div>
+                `).join('')}
+            </div>
+        `;
+    } else {
+        // short_2marks, short_3marks, long_answer
+        body.innerHTML = `
+            <label>Question Text</label>
+            <textarea id="ef_question" rows="3">${esc(q.question)}</textarea>
+            <label>Answer / Marking Key</label>
+            <textarea id="ef_answer_text" rows="4">${esc(q.answer)}</textarea>
+        `;
+    }
+
+    document.getElementById('editModal').style.display = 'flex';
+}
+
+function closeEditModal() {
+    document.getElementById('editModal').style.display = 'none';
+    editModalContext = null;
+}
+
+function saveEditModal() {
+    if (!editModalContext) return;
+    const { slotNum, isOR, type } = editModalContext;
+    const target = isOR ? activeORs : activeDraft;
+    const q = target[slotNum];
+    if (!q) return;
+
+    if (type === 'mcq') {
+        q.question = document.getElementById('ef_question').value;
+        q.options = q.options || {};
+        q.options.a = document.getElementById('ef_opt_a').value;
+        q.options.b = document.getElementById('ef_opt_b').value;
+        q.options.c = document.getElementById('ef_opt_c').value;
+        q.options.d = document.getElementById('ef_opt_d').value;
+        q.answer = document.getElementById('ef_answer').value;
+    } else if (type === 'assertion_reason') {
+        q.assertion = document.getElementById('ef_assertion').value;
+        q.reason = document.getElementById('ef_reason').value;
+        q.answer = document.getElementById('ef_answer').value;
+    } else if (type === 'case_based') {
+        q.case_study = document.getElementById('ef_case_study').value;
+        const qEls = document.querySelectorAll('#ef_subq_list .ef_subq_q');
+        const aEls = document.querySelectorAll('#ef_subq_list .ef_subq_a');
+        q.sub_questions = (q.sub_questions || []).map((sq, i) => ({
+            ...sq,
+            question: qEls[i] ? qEls[i].value : sq.question,
+            answer: aEls[i] ? aEls[i].value : sq.answer
+        }));
+    } else {
+        q.question = document.getElementById('ef_question').value;
+        q.answer = document.getElementById('ef_answer_text').value;
+    }
+
+    closeEditModal();
+
+    // Refresh the draft slot card
+    const bpKey = blueprintSelect.value;
+    const bp = blueprints[bpKey];
+    const slot = bp?.slots.find(s => s.num === slotNum);
+    const card = document.getElementById(`slot_card_${slotNum}`);
+    if (slot && card) renderSlotState(card, slot);
+
+    // Refresh the final compiled paper if it's currently showing
+    if (paperPreviewSection.style.display !== 'none') compileBoardPaper();
+}
