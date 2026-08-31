@@ -1,9 +1,11 @@
 require('dotenv').config();
+
 const express = require('express');
 const cors = require('cors');
 const fetch = require('node-fetch');
 const crypto = require('crypto');
 const path = require('path');
+
 
 // ============================================================
 // AI PROVIDER CONFIGURATION
@@ -43,117 +45,383 @@ const AI_PROVIDERS = [
             'openrouter/free'
         ]
     }
-].filter(provider => provider.key);
+].filter(provider => provider.key && provider.key.trim());
+
+
+// ============================================================
+// EXPRESS SETUP
+// ============================================================
 
 const app = express();
+
 app.use(cors());
-// Raised from 25mb so 2-3 full-resolution phone-camera blueprint photos
-// (base64-encoded, which adds ~33% overhead) don't get rejected mid-upload.
-app.use(express.json({ limit: '50mb' }));
-app.use(express.static(path.join(__dirname)));
+
+app.use(
+    express.json({
+        limit: '50mb'
+    })
+);
+
+app.use(
+    express.static(path.join(__dirname))
+);
 
 app.get('/', (req, res) => {
-    res.sendFile(path.join(__dirname, 'index.html'));
+    res.sendFile(
+        path.join(__dirname, 'index.html')
+    );
 });
 
-// Store generated questions to prevent duplication
+
+// ============================================================
+// QUESTION HISTORY
+// ============================================================
+
 const questionHistory = new Map();
 
-function historyKey(cls, sub, chapters) {
-    return `${cls}::${sub}::${(chapters || []).sort().join('||')}`;
+function historyKey(classNum, subject, chapters) {
+
+    return `${classNum}::${subject}::${(chapters || [])
+        .slice()
+        .sort()
+        .join('||')}`;
+
 }
 
-// --- Structured-output schemas -------------------------------------------------
-// Relying on prompt text alone ("respond with JSON shaped like...") is not
-// enough — Gemini can and does drift to a different shape (e.g. producing a
-// case-study passage when an MCQ was requested), and the front-end will then
-// happily render whatever field it finds. Passing a real Gemini responseSchema
-// forces the model to emit exactly the fields for the requested question
-// type(s), so a slot asked for "mcq" can never come back shaped like
-// "case_based".
+
+// ============================================================
+// GEMINI RESPONSE SCHEMAS
+// ============================================================
+
 const ITEM_SCHEMAS = {
+
     mcq: {
         type: 'OBJECT',
+
         properties: {
-            question: { type: 'STRING' },
+
+            question: {
+                type: 'STRING'
+            },
+
             options: {
                 type: 'OBJECT',
-                properties: { a: { type: 'STRING' }, b: { type: 'STRING' }, c: { type: 'STRING' }, d: { type: 'STRING' } },
-                required: ['a', 'b', 'c', 'd']
+
+                properties: {
+
+                    a: {
+                        type: 'STRING'
+                    },
+
+                    b: {
+                        type: 'STRING'
+                    },
+
+                    c: {
+                        type: 'STRING'
+                    },
+
+                    d: {
+                        type: 'STRING'
+                    }
+
+                },
+
+                required: [
+                    'a',
+                    'b',
+                    'c',
+                    'd'
+                ]
             },
-            answer: { type: 'STRING', enum: ['a', 'b', 'c', 'd'] },
-            chapter: { type: 'STRING' }
+
+            answer: {
+                type: 'STRING',
+                enum: [
+                    'a',
+                    'b',
+                    'c',
+                    'd'
+                ]
+            },
+
+            chapter: {
+                type: 'STRING'
+            }
+
         },
-        required: ['question', 'options', 'answer']
+
+        required: [
+            'question',
+            'options',
+            'answer'
+        ]
     },
+
+
     assertion_reason: {
+
         type: 'OBJECT',
+
         properties: {
-            assertion: { type: 'STRING' },
-            reason: { type: 'STRING' },
-            options: {
-                type: 'OBJECT',
-                properties: { a: { type: 'STRING' }, b: { type: 'STRING' }, c: { type: 'STRING' }, d: { type: 'STRING' } },
-                required: ['a', 'b', 'c', 'd']
+
+            assertion: {
+                type: 'STRING'
             },
-            answer: { type: 'STRING', enum: ['a', 'b', 'c', 'd'] },
-            chapter: { type: 'STRING' }
+
+            reason: {
+                type: 'STRING'
+            },
+
+            options: {
+
+                type: 'OBJECT',
+
+                properties: {
+
+                    a: {
+                        type: 'STRING'
+                    },
+
+                    b: {
+                        type: 'STRING'
+                    },
+
+                    c: {
+                        type: 'STRING'
+                    },
+
+                    d: {
+                        type: 'STRING'
+                    }
+
+                },
+
+                required: [
+                    'a',
+                    'b',
+                    'c',
+                    'd'
+                ]
+            },
+
+            answer: {
+                type: 'STRING',
+
+                enum: [
+                    'a',
+                    'b',
+                    'c',
+                    'd'
+                ]
+            },
+
+            chapter: {
+                type: 'STRING'
+            }
+
         },
-        required: ['assertion', 'reason', 'answer']
+
+        required: [
+            'assertion',
+            'reason',
+            'options',
+            'answer'
+        ]
     },
+
+
     short_2marks: {
+
         type: 'OBJECT',
-        properties: { question: { type: 'STRING' }, answer: { type: 'STRING' }, chapter: { type: 'STRING' } },
-        required: ['question', 'answer']
-    },
-    short_3marks: {
-        type: 'OBJECT',
-        properties: { question: { type: 'STRING' }, answer: { type: 'STRING' }, chapter: { type: 'STRING' } },
-        required: ['question', 'answer']
-    },
-    long_answer: {
-        type: 'OBJECT',
-        properties: { question: { type: 'STRING' }, answer: { type: 'STRING' }, chapter: { type: 'STRING' } },
-        required: ['question', 'answer']
-    },
-    case_based: {
-        type: 'OBJECT',
+
         properties: {
-            case_study: { type: 'STRING' },
+
+            question: {
+                type: 'STRING'
+            },
+
+            answer: {
+                type: 'STRING'
+            },
+
+            chapter: {
+                type: 'STRING'
+            }
+
+        },
+
+        required: [
+            'question',
+            'answer'
+        ]
+    },
+
+
+    short_3marks: {
+
+        type: 'OBJECT',
+
+        properties: {
+
+            question: {
+                type: 'STRING'
+            },
+
+            answer: {
+                type: 'STRING'
+            },
+
+            chapter: {
+                type: 'STRING'
+            }
+
+        },
+
+        required: [
+            'question',
+            'answer'
+        ]
+    },
+
+
+    long_answer: {
+
+        type: 'OBJECT',
+
+        properties: {
+
+            question: {
+                type: 'STRING'
+            },
+
+            answer: {
+                type: 'STRING'
+            },
+
+            chapter: {
+                type: 'STRING'
+            }
+
+        },
+
+        required: [
+            'question',
+            'answer'
+        ]
+    },
+
+
+    case_based: {
+
+        type: 'OBJECT',
+
+        properties: {
+
+            case_study: {
+                type: 'STRING'
+            },
+
             sub_questions: {
+
                 type: 'ARRAY',
+
                 items: {
+
                     type: 'OBJECT',
-                    properties: { question: { type: 'STRING' }, answer: { type: 'STRING' }, marks: { type: 'INTEGER' } },
-                    required: ['question', 'answer']
+
+                    properties: {
+
+                        question: {
+                            type: 'STRING'
+                        },
+
+                        answer: {
+                            type: 'STRING'
+                        },
+
+                        marks: {
+                            type: 'INTEGER'
+                        }
+
+                    },
+
+                    required: [
+                        'question',
+                        'answer'
+                    ]
                 }
             },
-            chapter: { type: 'STRING' }
+
+            chapter: {
+                type: 'STRING'
+            }
+
         },
-        required: ['case_study', 'sub_questions']
+
+        required: [
+            'case_study',
+            'sub_questions'
+        ]
     }
+
 };
 
-// Builds a Gemini responseSchema that only allows the given question type
-// keys, each an array of that type's item shape — nothing else can appear.
+
+// ============================================================
+// BUILD GEMINI RESPONSE SCHEMA
+// ============================================================
+
 function buildResponseSchema(types) {
+
     const properties = {};
-    types.forEach(t => {
-        properties[t] = { type: 'ARRAY', items: ITEM_SCHEMAS[t] || ITEM_SCHEMAS.short_2marks };
+
+    types.forEach(type => {
+
+        properties[type] = {
+
+            type: 'ARRAY',
+
+            items:
+                ITEM_SCHEMAS[type] ||
+                ITEM_SCHEMAS.short_2marks
+
+        };
+
     });
-    return { type: 'OBJECT', properties, required: types };
+
+    return {
+
+        type: 'OBJECT',
+
+        properties,
+
+        required: types
+
+    };
+
 }
 
-app.post('/api/generate',
-         // ============================================================
+
+// ============================================================
 // GEMINI API
 // ============================================================
 
-async function callGemini(provider, model, prompt, responseTypes) {
+async function callGemini(
+    provider,
+    model,
+    prompt,
+    responseTypes
+) {
+
+    const url =
+        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${provider.key.trim()}`;
+
 
     const response = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${provider.key.trim()}`,
+        url,
         {
+
             method: 'POST',
 
             headers: {
@@ -161,204 +429,246 @@ async function callGemini(provider, model, prompt, responseTypes) {
             },
 
             body: JSON.stringify({
+
                 contents: [
+
                     {
+
                         role: 'user',
+
                         parts: [
+
                             {
                                 text: prompt
                             }
+
                         ]
+
                     }
+
                 ],
 
                 generationConfig: {
-                    responseMimeType: 'application/json',
+
+                    responseMimeType:
+                        'application/json',
 
                     responseSchema:
-                        buildResponseSchema(responseTypes),
+                        buildResponseSchema(
+                            responseTypes
+                        ),
 
                     temperature: 1.0
+
                 }
+
             })
+
         }
     );
 
+
     if (!response.ok) {
 
-        const errorText = await response.text();
+        const errorText =
+            await response.text();
 
-        const error = new Error(
-            `Gemini ${response.status}: ${errorText}`
-        );
+        const error =
+            new Error(
+                `Gemini ${response.status}: ${errorText}`
+            );
 
-        error.status = response.status;
+        error.status =
+            response.status;
 
         throw error;
     }
 
-    const result = await response.json();
 
-    return result.candidates?.[0]?.content?.parts?.[0]?.text;
+    const result =
+        await response.json();
+
+
+    return result
+        ?.candidates?.[0]
+        ?.content?.parts?.[0]
+        ?.text;
 }
-         // ============================================================
-// GROQ API
+
+
+// ============================================================
+// OPENAI-COMPATIBLE API
+// Used by Groq / Cerebras / OpenRouter
 // ============================================================
 
-async function callGroq(provider, model, prompt) {
+async function callOpenAICompatible(
+    provider,
+    model,
+    prompt,
+    endpoint,
+    extraHeaders = {}
+) {
 
     const response = await fetch(
-        'https://api.groq.com/openai/v1/chat/completions',
+        endpoint,
         {
+
             method: 'POST',
 
             headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${provider.key.trim()}`
+
+                'Content-Type':
+                    'application/json',
+
+                'Authorization':
+                    `Bearer ${provider.key.trim()}`,
+
+                ...extraHeaders
+
             },
 
             body: JSON.stringify({
-                model: model,
+
+                model,
 
                 messages: [
+
                     {
+
                         role: 'user',
+
                         content: prompt
+
                     }
+
                 ],
 
                 temperature: 1,
 
                 response_format: {
+
                     type: 'json_object'
+
                 }
+
             })
+
         }
     );
 
+
     if (!response.ok) {
 
-        const errorText = await response.text();
+        const errorText =
+            await response.text();
 
-        const error = new Error(
-            `Groq ${response.status}: ${errorText}`
-        );
+        const error =
+            new Error(
+                `${provider.name} ${response.status}: ${errorText}`
+            );
 
-        error.status = response.status;
+        error.status =
+            response.status;
 
         throw error;
     }
 
-    const result = await response.json();
 
-    return result.choices?.[0]?.message?.content;
+    const result =
+        await response.json();
+
+
+    return result
+        ?.choices?.[0]
+        ?.message?.content;
 }
+
+
 // ============================================================
-// CEREBRAS API
+// GROQ
 // ============================================================
 
-async function callCerebras(provider, model, prompt) {
+async function callGroq(
+    provider,
+    model,
+    prompt
+) {
 
-    const response = await fetch(
-        'https://api.cerebras.ai/v1/chat/completions',
-        {
-            method: 'POST',
+    return callOpenAICompatible(
 
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${provider.key.trim()}`
-            },
+        provider,
 
-            body: JSON.stringify({
-                model: model,
+        model,
 
-                messages: [
-                    {
-                        role: 'user',
-                        content: prompt
-                    }
-                ],
+        prompt,
 
-                temperature: 1,
+        'https://api.groq.com/openai/v1/chat/completions'
 
-                response_format: {
-                    type: 'json_object'
-                }
-            })
-        }
     );
 
-    if (!response.ok) {
-
-        const errorText = await response.text();
-
-        const error = new Error(
-            `Cerebras ${response.status}: ${errorText}`
-        );
-
-        error.status = response.status;
-
-        throw error;
-    }
-
-    const result = await response.json();
-
-    return result.choices?.[0]?.message?.content;
 }
+
+
 // ============================================================
-// OPENROUTER API
+// CEREBRAS
 // ============================================================
 
-async function callOpenRouter(provider, model, prompt) {
+async function callCerebras(
+    provider,
+    model,
+    prompt
+) {
 
-    const response = await fetch(
+    return callOpenAICompatible(
+
+        provider,
+
+        model,
+
+        prompt,
+
+        'https://api.cerebras.ai/v1/chat/completions'
+
+    );
+
+}
+
+
+// ============================================================
+// OPENROUTER
+// ============================================================
+
+async function callOpenRouter(
+    provider,
+    model,
+    prompt
+) {
+
+    return callOpenAICompatible(
+
+        provider,
+
+        model,
+
+        prompt,
+
         'https://openrouter.ai/api/v1/chat/completions',
+
         {
-            method: 'POST',
 
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${provider.key.trim()}`,
-                'HTTP-Referer': 'https://cbse-question-generator-mfyy.onrender.com/',
-                'X-Title': 'CBSE Question Generator'
-            },
+            'HTTP-Referer':
+                'https://cbse-question-generator-mfyy.onrender.com/',
 
-            body: JSON.stringify({
-                model: model,
+            'X-Title':
+                'CBSE Question Generator'
 
-                messages: [
-                    {
-                        role: 'user',
-                        content: prompt
-                    }
-                ],
-
-                temperature: 1,
-
-                response_format: {
-                    type: 'json_object'
-                }
-            })
         }
+
     );
 
-    if (!response.ok) {
-
-        const errorText = await response.text();
-
-        const error = new Error(
-            `OpenRouter ${response.status}: ${errorText}`
-        );
-
-        error.status = response.status;
-
-        throw error;
-    }
-
-    const result = await response.json();
-
-    return result.choices?.[0]?.message?.content;
 }
+
+
 // ============================================================
 // PROVIDER DISPATCHER
 // ============================================================
@@ -374,479 +684,1469 @@ async function callProvider(
 
         case 'gemini':
 
-            return await callGemini(
+            return callGemini(
                 provider,
                 model,
                 prompt,
                 responseTypes
             );
 
+
         case 'groq':
 
-            return await callGroq(
+            return callGroq(
                 provider,
                 model,
                 prompt
             );
+
 
         case 'cerebras':
 
-            return await callCerebras(
+            return callCerebras(
                 provider,
                 model,
                 prompt
             );
+
 
         case 'openrouter':
 
-            return await callOpenRouter(
+            return callOpenRouter(
                 provider,
                 model,
                 prompt
             );
+
 
         default:
 
             throw new Error(
                 `Unknown AI provider: ${provider.name}`
             );
+
     }
-}
-         async (req, res) => {
-    try {
-        const { classNum, subject, chapters, questionTypes, singleSlotReq, difficulty, styleGuide } = req.body;
-        const apiKey = process.env.GEMINI_API_KEY || process.env.GROQ_API_KEY;
 
-        if (AI_PROVIDERS.length === 0) {
-    return res.status(500).json({
-        error: 'Server Config Error: No AI API keys are configured.'
-    });
 }
 
-        if (!classNum || !subject || !chapters || chapters.length === 0) {
-            return res.status(400).json({ error: 'Please select class, subject, and chapters.' });
-        }
 
-        const hKey = historyKey(classNum, subject, chapters);
-        const prevQuestions = questionHistory.get(hKey) || [];
-        const avoidBlock = prevQuestions.length > 0
-            ? `\n\n⚠️ DO NOT REPEAT THESE PREVIOUSLY GENERATED QUESTIONS:\n"""\n${prevQuestions.slice(-100).join('\n')}\n"""\n`
-            : '';
-
-        const seed = crypto.randomBytes(16).toString('hex');
-        const ts = Date.now();
-
-        const difficultyBlock = difficulty && difficulty !== 'mixed'
-            ? `\nDIFFICULTY LEVEL: Generate all questions strictly at "${difficulty.toUpperCase()}" difficulty (Easy = direct textbook recall, Medium = applied understanding requiring 1-2 reasoning steps, Hard = analytical / HOTS reasoning with multi-step logic).`
-            : `\nDIFFICULTY LEVEL: Mixed — vary difficulty naturally across easy, medium and hard the way a real board paper would.`;
-
-        const styleGuideBlock = styleGuide
-            ? `\n\nMATCH THIS EXISTING PAPER'S STYLE PATTERN (replicate phrasing/format conventions only — never copy actual content):\n"""\n${styleGuide}\n"""\n`
-            : '';
-
-        const isNcf9 = classNum === '9';
-        const syllabusContext = isNcf9
-            ? `Class 9 follows the NEW NCF-SE syllabus (Science: 'Exploration', Math: 'Orienting Yourself', SST: integrated book).`
-            : `Class 10 follows standard NCERT/CBSE rationalized curriculum.`;
-
-        // Customize generation behavior for single slot vs multi-pool
-        let generationRules = '';
-        let jsonSchema = '';
-        let responseTypes = [];
-
-        if (singleSlotReq) {
-            // High-speed, focused prompt for populating a single structural slot
-            const { type, marks, context } = singleSlotReq;
-            generationRules = `Generate EXACTLY ONE original question of type: "${type}" worth ${marks} marks. Do not generate any other question type — only "${type}".
-Context metadata to obey: ${context || 'None'}.`;
-            
-            const schemaMap = {
-                mcq: '"mcq": [{"question": "q with HTML sup/sub", "options": {"a": "o1", "b": "o2", "c": "o3", "d": "o4"}, "answer": "a", "chapter": "ch"}]',
-                assertion_reason: '"assertion_reason": [{"assertion": "A", "reason": "R", "options": {"a": "Both true...", "b": "Both true...", "c": "A true...", "d": "A false..."}, "answer": "a", "chapter": "ch"}]',
-                short_2marks: '"short_2marks": [{"question": "q", "answer": "ans", "chapter": "ch"}]',
-                short_3marks: '"short_3marks": [{"question": "q", "answer": "ans", "chapter": "ch"}]',
-                case_based: '"case_based": [{"case_study": "passage", "sub_questions": [{"question": "sub q", "answer": "ans", "marks": 1}], "chapter": "ch"}]',
-                long_answer: '"long_answer": [{"question": "q", "answer": "ans", "chapter": "ch"}]'
-            };
-            const resolvedType = schemaMap[type] ? type : 'short_2marks';
-            jsonSchema = schemaMap[resolvedType];
-            responseTypes = [resolvedType];
-        } else {
-            // General bulk pool generation
-            const activeTypes = questionTypes || ['mcq', 'short_2marks'];
-            const promptBlocks = {
-                mcq: "- mcq: Exactly 5 original MCQs (1 mark each). Include 4 options and the correct answer index.",
-                assertion_reason: "- assertion_reason: Exactly 5 A/R questions (1 mark each) with standard CBSE choices.",
-                short_2marks: "- short_2marks: Exactly 5 Short Answer questions (2 marks each) with clear key answers.",
-                short_3marks: "- short_3marks: Exactly 5 Short Answer questions (3 marks each) with clear key answers.",
-                case_based: "- case_based: Exactly 3 detailed case studies (4 marks each) with a stimulus passage (100+ words) followed by 4 sub-questions.",
-                long_answer: "- long_answer: Exactly 3 detailed Long Answer questions (5 marks each) with clear grading answers."
-            };
-            const schemaBlocks = {
-                mcq: '"mcq": [{"question": "q", "options": {"a": "1", "b": "2", "c": "3", "d": "4"}, "answer": "a", "chapter": "ch"}]',
-                assertion_reason: '"assertion_reason": [{"assertion": "A", "reason": "R", "options": {"a": "Both...", "b": "Both...", "c": "A...", "d": "R..."}, "answer": "a", "chapter": "ch"}]',
-                short_2marks: '"short_2marks": [{"question": "q", "answer": "ans", "chapter": "ch"}]',
-                short_3marks: '"short_3marks": [{"question": "q", "answer": "ans", "chapter": "ch"}]',
-                case_based: '"case_based": [{"case_study": "passage", "sub_questions": [{"question": "sq", "answer": "ans", "marks": 1}], "chapter": "ch"}]',
-                long_answer: '"long_answer": [{"question": "q", "answer": "ans", "chapter": "ch"}]'
-            };
-            generationRules = activeTypes.map(t => promptBlocks[t]).join('\n');
-            jsonSchema = activeTypes.map(t => schemaBlocks[t]).join(',\n  ');
-            responseTypes = activeTypes;
-        }
-
-        const prompt = `You are an expert CBSE board paper setter. Generate unique content.
-
-TEXTBOOK: NCERT Class ${classNum} ${subject} — Latest Edition
-SELECTED CHAPTERS: ${chapters.join(' | ')}
-${syllabusContext}
-
-UNIQUE GENERATION ID: ${seed}-${ts}
-
-You must generate questions based ONLY on these rules:
-${generationRules}
-
-FORMATTING CONSTRAINTS:
-1. Science/Math: Use HTML tags for formatting. Subscripts: <sub>text</sub> (e.g. H<sub>2</sub>O). Superscripts: <sup>text</sup> (e.g. x<sup>2</sup>). Never write as flat plain text.
-2. For Math: Use proper fractional layouts and simple equations.
-${difficultyBlock}${styleGuideBlock}
-${avoidBlock}
-
-RESPOND ONLY WITH VALID JSON MATCHING THIS EXACT SCHAPE (NO MARKDOWN CODEBLOCKS):
-{
-  ${jsonSchema}
-}`;
-
-
-        
 // ============================================================
-// AI PROVIDER FAILOVER
+// CLEAN JSON RESPONSE
 // ============================================================
 
-let content = null;
+function cleanJsonText(content) {
 
-let successfulProvider = null;
-let successfulModel = null;
+    if (!content) {
+        return null;
+    }
 
-let lastError = null;
+
+    content =
+        content
+            .replace(
+                /```json\s*/gi,
+                ''
+            )
+            .replace(
+                /```\s*/gi,
+                ''
+            )
+            .trim();
 
 
-// Try each provider one by one
-for (const provider of AI_PROVIDERS) {
+    const firstBrace =
+        content.indexOf('{');
 
-    console.log(
-        `Trying AI provider: ${provider.name}`
+    const lastBrace =
+        content.lastIndexOf('}');
+
+
+    if (
+        firstBrace !== -1 &&
+        lastBrace !== -1
+    ) {
+
+        content =
+            content.substring(
+                firstBrace,
+                lastBrace + 1
+            );
+
+    }
+
+
+    return content;
+
+}
+
+
+// ============================================================
+// VALIDATE QUESTIONS
+// ============================================================
+
+function validateQuestions(
+    questions,
+    responseTypes
+) {
+
+    if (
+        !questions ||
+        typeof questions !== 'object'
+    ) {
+
+        return false;
+
+    }
+
+
+    return responseTypes.every(
+        type =>
+            Array.isArray(
+                questions[type]
+            )
     );
 
+}
 
-    // Try every model configured for this provider
-    for (const model of provider.models) {
+
+// ============================================================
+// QUESTION GENERATION
+// ============================================================
+
+app.post(
+    '/api/generate',
+    async (req, res) => {
 
         try {
 
-            console.log(
-                `Trying model: ${provider.name} / ${model}`
-            );
+            const {
+
+                classNum,
+
+                subject,
+
+                chapters,
+
+                questionTypes,
+
+                singleSlotReq,
+
+                difficulty,
+
+                styleGuide
+
+            } = req.body;
 
 
-            // Call the correct API depending on provider
-            const result = await callProvider(
-                provider,
-                model,
-                prompt,
-                responseTypes
-            );
+            // ------------------------------------------------
+            // CHECK API KEYS
+            // ------------------------------------------------
+
+            if (
+                AI_PROVIDERS.length === 0
+            ) {
+
+                return res
+                    .status(500)
+                    .json({
+
+                        error:
+                            'No AI API keys are configured in Render.'
+
+                    });
+
+            }
 
 
-            // If we received content, stop
-            if (result) {
+            // ------------------------------------------------
+            // VALIDATE REQUEST
+            // ------------------------------------------------
 
-                content = result;
+            if (
+                !classNum ||
+                !subject ||
+                !Array.isArray(chapters) ||
+                !chapters.length
+            ) {
 
-                successfulProvider =
-                    provider.name;
+                return res
+                    .status(400)
+                    .json({
 
-                successfulModel =
-                    model;
+                        error:
+                            'Please select class, subject, and chapters.'
+
+                    });
+
+            }
 
 
-                console.log(
-                    `SUCCESS: ${provider.name} / ${model}`
+            // ------------------------------------------------
+            // QUESTION HISTORY
+            // ------------------------------------------------
+
+            const hKey =
+                historyKey(
+                    classNum,
+                    subject,
+                    chapters
                 );
 
-                break;
+
+            const prevQuestions =
+                questionHistory.get(hKey) ||
+                [];
+
+
+            const avoidBlock =
+                prevQuestions.length
+
+                    ? `
+
+DO NOT REPEAT THESE PREVIOUS QUESTIONS:
+
+${prevQuestions
+    .slice(-100)
+    .join('\n')}
+
+`
+
+                    : '';
+
+
+            // ------------------------------------------------
+            // RANDOM SEED
+            // ------------------------------------------------
+
+            const seed =
+                crypto
+                    .randomBytes(16)
+                    .toString('hex');
+
+
+            // ------------------------------------------------
+            // QUESTION TYPES
+            // ------------------------------------------------
+
+            let generationRules = '';
+
+            let jsonSchema = '';
+
+            let responseTypes = [];
+
+
+            const schemaMap = {
+
+                mcq:
+                    '"mcq":[{"question":"q","options":{"a":"o1","b":"o2","c":"o3","d":"o4"},"answer":"a","chapter":"ch"}]',
+
+
+                assertion_reason:
+                    '"assertion_reason":[{"assertion":"A","reason":"R","options":{"a":"Both A and R are true and R is the correct explanation of A","b":"Both A and R are true but R is not the correct explanation of A","c":"A is true but R is false","d":"A is false but R is true"},"answer":"a","chapter":"ch"}]',
+
+
+                short_2marks:
+                    '"short_2marks":[{"question":"q","answer":"ans","chapter":"ch"}]',
+
+
+                short_3marks:
+                    '"short_3marks":[{"question":"q","answer":"ans","chapter":"ch"}]',
+
+
+                case_based:
+                    '"case_based":[{"case_study":"passage","sub_questions":[{"question":"sub q","answer":"ans","marks":1}],"chapter":"ch"}]',
+
+
+                long_answer:
+                    '"long_answer":[{"question":"q","answer":"ans","chapter":"ch"}]'
+
+            };
+
+
+            // ------------------------------------------------
+            // SINGLE QUESTION
+            // ------------------------------------------------
+
+            if (singleSlotReq) {
+
+                const type =
+                    schemaMap[
+                        singleSlotReq.type
+                    ]
+
+                        ? singleSlotReq.type
+
+                        : 'short_2marks';
+
+
+                generationRules =
+
+                    `Generate EXACTLY ONE original ${type} question worth ${singleSlotReq.marks} marks.
+
+Context:
+${singleSlotReq.context || 'None'}`;
+
+
+                jsonSchema =
+                    schemaMap[type];
+
+
+                responseTypes = [
+                    type
+                ];
+
             }
 
-        } catch (error) {
 
-            lastError = error;
+            // ------------------------------------------------
+            // MULTIPLE QUESTIONS
+            // ------------------------------------------------
+
+            else {
+
+                const activeTypes =
+
+                    Array.isArray(questionTypes) &&
+                    questionTypes.length
+
+                        ? questionTypes.filter(
+                            type =>
+                                schemaMap[type]
+                        )
+
+                        : [
+                            'mcq',
+                            'short_2marks'
+                        ];
 
 
-            console.error(
-                `FAILED: ${provider.name} / ${model}`
+                const blocks = {
+
+                    mcq:
+                        'Exactly 5 original MCQs (1 mark each).',
+
+
+                    assertion_reason:
+                        'Exactly 5 Assertion-Reason questions (1 mark each).',
+
+
+                    short_2marks:
+                        'Exactly 5 short-answer questions (2 marks each).',
+
+
+                    short_3marks:
+                        'Exactly 5 short-answer questions (3 marks each).',
+
+
+                    case_based:
+                        'Exactly 3 detailed case-based questions (4 marks each) with a stimulus passage and 4 sub-questions.',
+
+
+                    long_answer:
+                        'Exactly 3 detailed long-answer questions (5 marks each).'
+
+                };
+
+
+                generationRules =
+
+                    activeTypes
+                        .map(
+                            type =>
+                                `- ${type}: ${blocks[type]}`
+                        )
+                        .join('\n');
+
+
+                jsonSchema =
+
+                    activeTypes
+                        .map(
+                            type =>
+                                schemaMap[type]
+                        )
+                        .join(',\n  ');
+
+
+                responseTypes =
+                    activeTypes;
+
+            }
+
+
+            // ------------------------------------------------
+            // DIFFICULTY
+            // ------------------------------------------------
+
+            const difficultyBlock =
+
+                difficulty &&
+                difficulty !== 'mixed'
+
+                    ? `DIFFICULTY: ${difficulty.toUpperCase()}.`
+
+                    : 'DIFFICULTY: Mixed easy, medium and hard.';
+
+
+            // ------------------------------------------------
+            // SYLLABUS
+            // ------------------------------------------------
+
+            const syllabus =
+
+                classNum === '9'
+
+                    ? 'Class 9 follows the current NCF-SE syllabus.'
+
+                    : 'Class 10 follows NCERT/CBSE curriculum.';
+
+
+            // ------------------------------------------------
+            // STYLE GUIDE
+            // ------------------------------------------------
+
+            const styleBlock =
+
+                styleGuide
+
+                    ? `
+
+STYLE GUIDE:
+
+${styleGuide}`
+
+                    : '';
+
+
+            // ------------------------------------------------
+            // PROMPT
+            // ------------------------------------------------
+
+            const prompt = `
+
+You are an expert CBSE board paper setter.
+
+Generate original, high-quality, syllabus-aligned questions.
+
+TEXTBOOK:
+NCERT Class ${classNum} ${subject}
+
+CHAPTERS:
+${chapters.join(' | ')}
+
+${syllabus}
+
+UNIQUE GENERATION ID:
+${seed}
+
+QUESTION REQUIREMENTS:
+
+${generationRules}
+
+${difficultyBlock}
+
+${styleBlock}
+
+${avoidBlock}
+
+IMPORTANT FORMATTING RULES:
+
+1. Return ONLY valid JSON.
+2. Do NOT use markdown.
+3. Do NOT use code fences.
+4. Do NOT add explanations before or after JSON.
+5. Use HTML <sub> and <sup> for subscripts and superscripts.
+6. Follow the requested question structure exactly.
+7. Questions must be original.
+8. Questions must be appropriate for CBSE.
+9. Answers must be factually correct.
+10. Do not repeat previous questions.
+
+REQUIRED JSON STRUCTURE:
+
+{
+  ${jsonSchema}
+}
+`;
+
+
+            // =================================================
+            // AI PROVIDER FAILOVER
+            // =================================================
+
+            let content = null;
+
+            let successfulProvider = null;
+
+            let successfulModel = null;
+
+            let lastError = null;
+
+
+            for (
+                const provider of AI_PROVIDERS
+            ) {
+
+                console.log(
+                    `Trying provider: ${provider.name}`
+                );
+
+
+                for (
+                    const model of provider.models
+                ) {
+
+                    try {
+
+                        console.log(
+                            `Trying model: ${provider.name} / ${model}`
+                        );
+
+
+                        const result =
+                            await callProvider(
+
+                                provider,
+
+                                model,
+
+                                prompt,
+
+                                responseTypes
+
+                            );
+
+
+                        if (result) {
+
+                            content =
+                                result;
+
+                            successfulProvider =
+                                provider.name;
+
+                            successfulModel =
+                                model;
+
+
+                            console.log(
+                                `SUCCESS: ${provider.name} / ${model}`
+                            );
+
+
+                            break;
+
+                        }
+
+                    }
+
+                    catch (error) {
+
+                        lastError =
+                            error;
+
+
+                        console.error(
+                            `FAILED: ${provider.name} / ${model}`
+                        );
+
+
+                        console.error(
+                            error.message
+                        );
+
+
+                        // IMPORTANT:
+                        // Continue to the next model/provider
+
+                        continue;
+
+                    }
+
+                }
+
+
+                // Stop provider loop
+                // if generation succeeded
+
+                if (content) {
+
+                    break;
+
+                }
+
+            }
+
+
+            // ------------------------------------------------
+            // ALL PROVIDERS FAILED
+            // ------------------------------------------------
+
+            if (!content) {
+
+                console.error(
+                    'ALL AI PROVIDERS FAILED'
+                );
+
+
+                console.error(
+                    lastError?.message
+                );
+
+
+                return res
+                    .status(503)
+                    .json({
+
+                        error:
+                            'All AI providers are temporarily unavailable. Please try again later.'
+
+                    });
+
+            }
+
+
+            console.log(
+                `Question generated using ${successfulProvider} / ${successfulModel}`
             );
 
-            console.error(
-                error.message
+
+            // ------------------------------------------------
+            // CLEAN RESPONSE
+            // ------------------------------------------------
+
+            content =
+                cleanJsonText(
+                    content
+                );
+
+
+            // ------------------------------------------------
+            // PARSE JSON
+            // ------------------------------------------------
+
+            let questions;
+
+
+            try {
+
+                questions =
+                    JSON.parse(
+                        content
+                    );
+
+            }
+
+            catch (error) {
+
+                console.error(
+                    'Invalid JSON from AI:',
+                    error.message
+                );
+
+
+                return res
+                    .status(502)
+                    .json({
+
+                        error:
+                            `${successfulProvider} returned invalid JSON. Please try again.`
+
+                    });
+
+            }
+
+
+            // ------------------------------------------------
+            // VALIDATE STRUCTURE
+            // ------------------------------------------------
+
+            if (
+                !validateQuestions(
+                    questions,
+                    responseTypes
+                )
+            ) {
+
+                return res
+                    .status(502)
+                    .json({
+
+                        error:
+                            `${successfulProvider} returned an unexpected question structure.`
+
+                    });
+
+            }
+
+
+            // ------------------------------------------------
+            // STORE QUESTION HISTORY
+            // ------------------------------------------------
+
+            const newTexts = [];
+
+
+            function trackQuestions(
+                arr,
+                key
+            ) {
+
+                if (
+                    !Array.isArray(arr)
+                ) {
+
+                    return;
+
+                }
+
+
+                arr.forEach(
+                    question => {
+
+                        if (
+                            question &&
+                            question[key]
+                        ) {
+
+                            newTexts.push(
+
+                                String(
+                                    question[key]
+                                ).substring(
+                                    0,
+                                    150
+                                )
+
+                            );
+
+                        }
+
+                    }
+                );
+
+            }
+
+
+            trackQuestions(
+                questions.mcq,
+                'question'
             );
 
 
-            // IMPORTANT:
-            // Do NOT return an error here.
-            //
-            // Instead continue to the next model/provider.
+            trackQuestions(
+                questions.assertion_reason,
+                'assertion'
+            );
 
-            continue;
+
+            trackQuestions(
+                questions.short_2marks,
+                'question'
+            );
+
+
+            trackQuestions(
+                questions.short_3marks,
+                'question'
+            );
+
+
+            trackQuestions(
+                questions.long_answer,
+                'question'
+            );
+
+
+            if (
+                Array.isArray(
+                    questions.case_based
+                )
+            ) {
+
+                questions.case_based.forEach(
+                    question => {
+
+                        if (
+                            question &&
+                            question.case_study
+                        ) {
+
+                            newTexts.push(
+
+                                String(
+                                    question.case_study
+                                ).substring(
+                                    0,
+                                    150
+                                )
+
+                            );
+
+                        }
+
+                    }
+                );
+
+            }
+
+
+            questionHistory.set(
+
+                hKey,
+
+                [
+                    ...prevQuestions,
+                    ...newTexts
+                ].slice(-250)
+
+            );
+
+
+            // ------------------------------------------------
+            // SEND RESPONSE
+            // ------------------------------------------------
+
+            return res.json({
+
+                success: true,
+
+                questions,
+
+                modelUsed:
+                    successfulModel,
+
+                providerUsed:
+                    successfulProvider
+
+            });
+
         }
+
+
+        catch (error) {
+
+            console.error(
+                'Server Catch Error:',
+                error
+            );
+
+
+            return res
+                .status(500)
+                .json({
+
+                    error:
+                        `Server internal error: ${error.message}`
+
+                });
+
+        }
+
     }
-
-
-    // If a provider succeeded,
-    // stop trying other providers.
-    if (content) {
-        break;
-    }
-}
-
-
-// ============================================================
-// ALL PROVIDERS FAILED
-// ============================================================
-
-if (!content) {
-
-    console.error(
-        'ALL AI PROVIDERS FAILED'
-    );
-
-    console.error(
-        lastError?.message
-    );
-
-
-    return res.status(503).json({
-
-        error:
-            'All AI providers are temporarily unavailable. Please try again later.'
-
-    });
-}
-
-// ============================================================
-// CLEAN AI RESPONSE
-// ============================================================
-
-content = content
-    .replace(/```json\s*/gi, '')
-    .replace(/```\s*/gi, '')
-    .trim();
-
-
-const firstBrace = content.indexOf('{');
-const lastBrace = content.lastIndexOf('}');
-
-
-if (firstBrace !== -1 && lastBrace !== -1) {
-
-    content = content.substring(
-        firstBrace,
-        lastBrace + 1
-    );
-}
-
-
-const questions = JSON.parse(content);
-
-console.log(
-    `Question generated using ${successfulProvider} / ${successfulModel}`
 );
 
-        let content = result.candidates?.[0]?.content?.parts?.[0]?.text;
 
-        if (!content) {
-            return res.status(500).json({ error: 'AI returned an empty response. Please retry.' });
-        }
+// ============================================================
+// BLUEPRINT IMAGE ANALYSIS
+// ============================================================
 
-        content = content.replace(/```json\s*/gi, '').replace(/```\s*/gi, '').trim();
-        const firstBrace = content.indexOf('{');
-        const lastBrace = content.lastIndexOf('}');
-        if (firstBrace !== -1 && lastBrace !== -1) {
-            content = content.substring(firstBrace, lastBrace + 1);
-        }
+app.post(
+    '/api/analyze-blueprint',
+    async (req, res) => {
 
-        const questions = JSON.parse(content);
+        try {
 
-        // Track questions in history to prevent duplication
-        const newTexts = [];
-        const track = (arr, key) => {
-            if (Array.isArray(arr)) arr.forEach(q => { if (q[key]) newTexts.push(q[key].substring(0, 150)); });
-        };
-        track(questions.mcq, 'question');
-        track(questions.assertion_reason, 'assertion');
-        track(questions.short_2marks, 'question');
-        track(questions.short_3marks, 'question');
-        track(questions.long_answer, 'question');
-        if (Array.isArray(questions.case_based)) {
-            questions.case_based.forEach(q => { if (q.case_study) newTexts.push(q.case_study.substring(0, 150)); });
-        }
+            const {
 
-        const updated = [...prevQuestions, ...newTexts].slice(-250);
-        questionHistory.set(hKey, updated);
+                imageBase64,
 
-        res.json({ success: true, questions, modelUsed: successfulModel });
+                mimeType,
 
-    } catch (err) {
-        console.error('Server Catch Error:', err);
-        res.status(500).json({ error: `Server internal catch error: ${err.message}` });
-    }
-});
+                images,
 
-// Analyze an uploaded blueprint image (e.g. the Science board blueprint table)
-// and convert it into a structured slot/section blueprint the front-end can render.
-app.post('/api/analyze-blueprint', async (req, res) => {
-    try {
-        const { imageBase64, mimeType, images, classNum, subject } = req.body;
-        const apiKey = process.env.GEMINI_API_KEY || process.env.GROQ_API_KEY;
+                classNum,
 
-        // Accept either a single legacy image, or an array of page images
-        const imageList = Array.isArray(images) && images.length
-            ? images
-            : (imageBase64 ? [{ base64: imageBase64, mimeType: mimeType || 'image/jpeg' }] : []);
+                subject
 
-        if (!apiKey) return res.status(500).json({ error: 'Server Config Error: API key is missing.' });
-        if (!imageList.length) return res.status(400).json({ error: 'No blueprint image was provided.' });
+            } = req.body;
 
-        const prompt = `You are an expert CBSE board exam paper-setter and design analyst.
 
-You are given ${imageList.length > 1 ? `${imageList.length} images that are DIFFERENT PAGES of the SAME blueprint document` : 'an image'} for a Question Paper BLUEPRINT / design. Typically one page shows an aggregate typology table (question type, marks each, number of questions, total marks, internal-choice count, and per-section marks split e.g. "Biology 30, Chemistry 25, Physics 25"), and an optional additional page may break the same totals down further by chapter/topic. Read ALL provided images together as one combined source before answering.
+            const provider =
+                AI_PROVIDERS.find(
+                    p =>
+                        p.name === 'gemini'
+                );
 
-Convert what you see into a structured JSON blueprint definition matching EXACTLY this schema:
+
+            const imageList =
+
+                Array.isArray(images) &&
+                images.length
+
+                    ? images
+
+                    : imageBase64
+
+                        ? [
+                            {
+                                base64:
+                                    imageBase64,
+
+                                mimeType:
+                                    mimeType ||
+                                    'image/jpeg'
+                            }
+                        ]
+
+                        : [];
+
+
+            if (!provider) {
+
+                return res
+                    .status(500)
+                    .json({
+
+                        error:
+                            'GEMINI_API_KEY is required for blueprint image analysis.'
+
+                    });
+
+            }
+
+
+            if (
+                !imageList.length
+            ) {
+
+                return res
+                    .status(400)
+                    .json({
+
+                        error:
+                            'No blueprint image was provided.'
+
+                    });
+
+            }
+
+
+            const prompt = `
+
+You are an expert CBSE board exam paper-setter.
+
+Analyze the supplied blueprint image(s) as one document.
+
+Return ONLY valid JSON.
+
+Use this exact structure:
+
 {
-  "title": "Short descriptive title${classNum ? ` mentioning Class ${classNum}` : ''}${subject ? ` ${subject}` : ''}",
-  "sections": [ { "id": "A", "name": "Section A: <short description> (Qx - Qy)", "subject": "<discipline tag if the blueprint splits by discipline, else General>" } ],
-  "slots": [ { "num": 1, "type": "mcq", "marks": 1, "sec": "A", "subject": "<optional discipline tag, else omit>", "optional": false } ]
+  "title": "...",
+  "sections": [
+    {
+      "id": "A",
+      "name": "...",
+      "subject": "General"
+    }
+  ],
+  "slots": [
+    {
+      "num": 1,
+      "type": "mcq",
+      "marks": 1,
+      "sec": "A",
+      "subject": "General",
+      "optional": false
+    }
+  ]
 }
 
-Rules:
-- "type" must be exactly one of: mcq, assertion_reason, short_2marks, short_3marks, case_based, long_answer. Map using the marks-per-question and label (1 mark "MCQ/straight" = mcq, 1 mark "Assertion-Reason" = assertion_reason, 2 mark "Very Short Answer" = short_2marks, 3 mark "Short Answer" = short_3marks, 4 mark "Case/Source-based" = case_based, 5 mark "Long Answer" = long_answer).
-- Build the full ordered "slots" array of "num" 1..N (sequential, no gaps) that satisfies the aggregate counts per question type EXACTLY as given in the typology table (e.g. if the table says 16 MCQs total, there must be exactly 16 slots with type "mcq").
-- If the blueprint gives a marks split across sections/disciplines (e.g. "Biology 30, Chemistry 25, Physics 25") but does not explicitly list every question number per section, distribute the question-type counts across the sections proportionally to each section's share of total marks, keeping each section's own subtotal marks as close as possible to its stated share, and group all slots for one section contiguously (all of Section A's slots before Section B's, etc.) the way real board papers are laid out (objective questions first, then short answers, then long answers, within each section — or across the whole paper if sections aren't discipline-based).
-- Use a chapter/topic breakdown page (if provided) only to sanity-check the per-type totals and to fill each section's "subject" tag — never let it override the totals from the aggregate/master typology table.
-- Set "optional": true on exactly the number of slots stated as having "Internal Choice" for that question-type row, distributing them evenly/sensibly across sections. If a total internal-choice count is given without a per-type breakdown, apply it to the higher-mark question types first (Long Answer, then Case-based, then Short Answer), which is the typical CBSE pattern.
-- "sec" must reference one of the section ids defined in "sections".
-- Total marks across all slots (accounting that "optional" slots are still counted once, since only one alternative is answered) must equal the paper's stated total marks.
+Allowed question types:
 
-RESPOND ONLY WITH VALID JSON MATCHING THIS SCHEMA. NO MARKDOWN CODEBLOCKS, NO COMMENTARY.`;
+mcq
+assertion_reason
+short_2marks
+short_3marks
+case_based
+long_answer
 
-        const models = ['gemini-3.6-flash', 'gemini-3.5-flash'];
-        let apiResponse, lastError = '';
+Build sequential slots.
 
-        const imageParts = imageList.map(img => ({
-            inline_data: { mime_type: img.mimeType || 'image/jpeg', data: img.base64 }
-        }));
+Preserve the aggregate counts, marks and internal-choice information visible in the blueprint.
 
-        for (const model of models) {
-            try {
-                apiResponse = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey.trim()}`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        contents: [{
-                            role: 'user',
-                            parts: [
-                                { text: prompt },
-                                ...imageParts
-                            ]
-                        }],
-                        generationConfig: { responseMimeType: 'application/json', temperature: 0.4 }
-                    })
-                });
-                if (apiResponse.ok) break;
-                lastError = await apiResponse.text();
-            } catch (e) {
-                lastError = e.message;
+Class:
+${classNum || ''}
+
+Subject:
+${subject || ''}
+
+`;
+
+
+            const parts = [
+
+                {
+                    text: prompt
+                }
+
+            ];
+
+
+            imageList.forEach(
+                image => {
+
+                    parts.push({
+
+                        inline_data: {
+
+                            mime_type:
+                                image.mimeType ||
+                                'image/jpeg',
+
+                            data:
+                                image.base64
+
+                        }
+
+                    });
+
+                }
+            );
+
+
+            let resultText = null;
+
+            let lastError = null;
+
+
+            for (
+                const model of provider.models
+            ) {
+
+                try {
+
+                    const response =
+                        await fetch(
+
+                            `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${provider.key.trim()}`,
+
+                            {
+
+                                method: 'POST',
+
+                                headers: {
+
+                                    'Content-Type':
+                                        'application/json'
+
+                                },
+
+                                body: JSON.stringify({
+
+                                    contents: [
+
+                                        {
+
+                                            role: 'user',
+
+                                            parts
+
+                                        }
+
+                                    ],
+
+                                    generationConfig: {
+
+                                        responseMimeType:
+                                            'application/json',
+
+                                        temperature:
+                                            0.4
+
+                                    }
+
+                                })
+
+                            }
+
+                        );
+
+
+                    if (
+                        !response.ok
+                    ) {
+
+                        lastError =
+                            await response.text();
+
+                        continue;
+
+                    }
+
+
+                    const data =
+                        await response.json();
+
+
+                    resultText =
+
+                        data
+                            ?.candidates?.[0]
+                            ?.content?.parts?.[0]
+                            ?.text;
+
+
+                    if (
+                        resultText
+                    ) {
+
+                        break;
+
+                    }
+
+                }
+
+                catch (error) {
+
+                    lastError =
+                        error.message;
+
+                }
+
             }
-        }
 
-        if (!apiResponse || !apiResponse.ok) {
-            return res.status(500).json({ error: `Blueprint analysis failed. Details: ${lastError}` });
-        }
 
-        const result = await apiResponse.json();
-        let content = result.candidates?.[0]?.content?.parts?.[0]?.text;
-        if (!content) return res.status(500).json({ error: 'AI returned an empty blueprint analysis. Try a clearer image.' });
+            if (
+                !resultText
+            ) {
 
-        content = content.replace(/```json\s*/gi, '').replace(/```\s*/gi, '').trim();
-        const firstBrace = content.indexOf('{');
-        const lastBrace = content.lastIndexOf('}');
-        if (firstBrace !== -1 && lastBrace !== -1) content = content.substring(firstBrace, lastBrace + 1);
+                return res
+                    .status(500)
+                    .json({
 
-        const blueprint = JSON.parse(content);
-        res.json({ success: true, blueprint });
+                        error:
+                            `Blueprint analysis failed: ${lastError || 'empty response'}`
 
-    } catch (err) {
-        console.error('Blueprint Analysis Error:', err);
-        res.status(500).json({ error: `Server error analyzing blueprint: ${err.message}` });
-    }
-});
+                    });
 
-// Analyze an uploaded sample question paper (PDF or image) and extract a
-// plain-text "style guide" describing its pattern, so generation can mimic it.
-app.post('/api/analyze-pattern', async (req, res) => {
-    try {
-        const { fileBase64, mimeType } = req.body;
-        const apiKey = process.env.GEMINI_API_KEY || process.env.GROQ_API_KEY;
-
-        if (!apiKey) return res.status(500).json({ error: 'Server Config Error: API key is missing.' });
-        if (!fileBase64) return res.status(400).json({ error: 'No sample paper file was provided.' });
-
-        const prompt = `You are an expert CBSE board exam paper-setter. Study the attached sample question paper carefully.
-
-Produce a concise STYLE GUIDE (plain text, max ~200 words) describing its design pattern so another paper-setter could replicate the same feel: phrasing style/tone of questions, typical sentence length, how MCQ options are worded, how case-based/source-based passages are framed, recurring instructional phrasing, and the general difficulty/HOTS balance.
-
-IMPORTANT: Do not copy any actual question text verbatim — describe only the PATTERN, never the content. Respond with plain text only, no markdown, no JSON.`;
-
-        const models = ['gemini-3.6-flash', 'gemini-3.5-flash'];
-        let apiResponse, lastError = '';
-
-        for (const model of models) {
-            try {
-                apiResponse = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey.trim()}`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        contents: [{
-                            role: 'user',
-                            parts: [
-                                { text: prompt },
-                                { inline_data: { mime_type: mimeType || 'application/pdf', data: fileBase64 } }
-                            ]
-                        }],
-                        generationConfig: { temperature: 0.4 }
-                    })
-                });
-                if (apiResponse.ok) break;
-                lastError = await apiResponse.text();
-            } catch (e) {
-                lastError = e.message;
             }
+
+
+            const blueprint =
+                JSON.parse(
+                    cleanJsonText(
+                        resultText
+                    )
+                );
+
+
+            return res.json({
+
+                success: true,
+
+                blueprint
+
+            });
+
         }
 
-        if (!apiResponse || !apiResponse.ok) {
-            return res.status(500).json({ error: `Pattern analysis failed. Details: ${lastError}` });
+
+        catch (error) {
+
+            console.error(
+                'Blueprint Analysis Error:',
+                error
+            );
+
+
+            return res
+                .status(500)
+                .json({
+
+                    error:
+                        `Server error analyzing blueprint: ${error.message}`
+
+                });
+
         }
 
-        const result = await apiResponse.json();
-        const styleGuide = result.candidates?.[0]?.content?.parts?.[0]?.text;
-        if (!styleGuide) return res.status(500).json({ error: 'AI returned an empty pattern analysis. Please retry.' });
-
-        res.json({ success: true, styleGuide: styleGuide.trim() });
-
-    } catch (err) {
-        console.error('Pattern Analysis Error:', err);
-        res.status(500).json({ error: `Server error analyzing pattern: ${err.message}` });
     }
-});
+);
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Active server hosted on port ${PORT}`));
+
+// ============================================================
+// SAMPLE PAPER STYLE ANALYSIS
+// ============================================================
+
+app.post(
+    '/api/analyze-pattern',
+    async (req, res) => {
+
+        try {
+
+            const {
+
+                fileBase64,
+
+                mimeType
+
+            } = req.body;
+
+
+            const provider =
+                AI_PROVIDERS.find(
+                    p =>
+                        p.name === 'gemini'
+                );
+
+
+            if (!provider) {
+
+                return res
+                    .status(500)
+                    .json({
+
+                        error:
+                            'GEMINI_API_KEY is required for pattern analysis.'
+
+                    });
+
+            }
+
+
+            if (!fileBase64) {
+
+                return res
+                    .status(400)
+                    .json({
+
+                        error:
+                            'No sample paper file was provided.'
+
+                    });
+
+            }
+
+
+            const prompt = `
+
+Study the attached CBSE sample paper.
+
+Produce a concise plain-text style guide describing:
+
+1. Phrasing
+2. Tone
+3. MCQ option style
+4. Case-study framing
+5. Instructional wording
+6. Difficulty level
+7. HOTS balance
+
+Do not copy actual questions.
+
+Plain text only.
+
+`;
+
+
+            let styleGuide = null;
+
+            let lastError = null;
+
+
+            for (
+                const model of provider.models
+            ) {
+
+                try {
+
+                    const response =
+                        await fetch(
+
+                            `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${provider.key.trim()}`,
+
+                            {
+
+                                method: 'POST',
+
+                                headers: {
+
+                                    'Content-Type':
+                                        'application/json'
+
+                                },
+
+                                body: JSON.stringify({
+
+                                    contents: [
+
+                                        {
+
+                                            role: 'user',
+
+                                            parts: [
+
+                                                {
+                                                    text:
+                                                        prompt
+                                                },
+
+                                                {
+
+                                                    inline_data: {
+
+                                                        mime_type:
+                                                            mimeType ||
+                                                            'application/pdf',
+
+                                                        data:
+                                                            fileBase64
+
+                                                    }
+
+                                                }
+
+                                            ]
+
+                                        }
+
+                                    ],
+
+                                    generationConfig: {
+
+                                        temperature:
+                                            0.4
+
+                                    }
+
+                                })
+
+                            }
+
+                        );
+
+
+                    if (
+                        !response.ok
+                    ) {
+
+                        lastError =
+                            await response.text();
+
+                        continue;
+
+                    }
+
+
+                    const data =
+                        await response.json();
+
+
+                    styleGuide =
+
+                        data
+                            ?.candidates?.[0]
+                            ?.content?.parts?.[0]
+                            ?.text;
+
+
+                    if (
+                        styleGuide
+                    ) {
+
+                        break;
+
+                    }
+
+                }
+
+                catch (error) {
+
+                    lastError =
+                        error.message;
+
+                }
+
+            }
+
+
+            if (
+                !styleGuide
+            ) {
+
+                return res
+                    .status(500)
+                    .json({
+
+                        error:
+                            `Pattern analysis failed: ${lastError || 'empty response'}`
+
+                    });
+
+            }
+
+
+            return res.json({
+
+                success: true,
+
+                styleGuide:
+                    styleGuide.trim()
+
+            });
+
+        }
+
+
+        catch (error) {
+
+            console.error(
+                'Pattern Analysis Error:',
+                error
+            );
+
+
+            return res
+                .status(500)
+                .json({
+
+                    error:
+                        `Server error analyzing pattern: ${error.message}`
+
+                });
+
+        }
+
+    }
+);
+
+
+// ============================================================
+// START SERVER
+// ============================================================
+
+const PORT =
+    process.env.PORT || 3000;
+
+
+app.listen(
+    PORT,
+    () => {
+
+        console.log(
+            `Active server hosted on port ${PORT}`
+        );
+
+        console.log(
+            'Configured AI providers:',
+            AI_PROVIDERS.map(
+                provider =>
+                    provider.name
+            ).join(', ') ||
+            'NONE'
+        );
+
+    }
+);
