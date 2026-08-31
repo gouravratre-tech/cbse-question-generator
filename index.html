@@ -53,11 +53,61 @@
                         <option value="Custom-Draft-30">Flexible Custom Mock Paper (30 Slots, 100 Marks)</option>
                     </select>
                 </div>
-                
+                <div class="field">
+                    <label>Question Difficulty Level</label>
+                    <select id="difficultySelect">
+                        <option value="mixed">Mixed (Board-Realistic Spread)</option>
+                        <option value="easy">Easy (Direct Recall)</option>
+                        <option value="medium">Medium (Applied Understanding)</option>
+                        <option value="hard">Hard (HOTS / Analytical)</option>
+                    </select>
+                </div>
+
                 <div class="field field-full">
                     <label>Select Source Chapters for Generation</label>
                     <div id="chapterBox" class="chapter-box">
                         <div class="empty-state">Select class and subject above to fetch chapters.</div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Advanced Tools: Blueprint Image, Pattern PDF, Logo -->
+        <section class="config-panel advanced-tools-panel">
+            <div class="panel-heading">
+                <i class="fas fa-toolbox"></i>
+                <h2>Advanced Tools (Optional)</h2>
+            </div>
+            <div class="advanced-tools-grid">
+                <div class="tool-card">
+                    <div class="tool-card-head"><i class="fas fa-drafting-compass"></i> Upload Blueprint Image(s)</div>
+                    <p class="tool-card-desc">Upload one or more photos/screenshots of your blueprint (e.g. the master typology table + a per-chapter breakdown page). AI will read them together and build a matching custom blueprint you can select above.</p>
+                    <input type="file" id="blueprintImageInput" accept="image/*" multiple>
+                    <button id="btnAnalyzeBlueprint" class="btn btn-outline btn-sm" disabled>
+                        <i class="fas fa-circle-notch fa-spin loader-icon" style="display:none"></i>
+                        <i class="fas fa-magic action-icon"></i> Analyze &amp; Build Blueprint
+                    </button>
+                    <div id="blueprintUploadStatus" class="tool-status"></div>
+                </div>
+
+                <div class="tool-card">
+                    <div class="tool-card-head"><i class="fas fa-file-pdf"></i> Upload Sample Paper (PDF)</div>
+                    <p class="tool-card-desc">Upload a past/sample question paper PDF. AI will study its phrasing and pattern so newly generated questions feel consistent with it.</p>
+                    <input type="file" id="patternPdfInput" accept="application/pdf,image/*">
+                    <button id="btnAnalyzePattern" class="btn btn-outline btn-sm" disabled>
+                        <i class="fas fa-circle-notch fa-spin loader-icon" style="display:none"></i>
+                        <i class="fas fa-search action-icon"></i> Analyze Pattern
+                    </button>
+                    <div id="patternUploadStatus" class="tool-status"></div>
+                </div>
+
+                <div class="tool-card">
+                    <div class="tool-card-head"><i class="fas fa-image"></i> School / Institute Logo</div>
+                    <p class="tool-card-desc">Your institute logo appears on the final printed question paper header by default. Upload a different image to replace it, or remove it entirely.</p>
+                    <input type="file" id="logoInput" accept="image/*">
+                    <div id="logoPreviewWrap" class="logo-preview-wrap">
+                        <img id="logoPreviewImg" alt="Logo preview">
+                        <button id="btnRemoveLogo" class="btn btn-danger btn-sm"><i class="fas fa-trash"></i> Remove</button>
                     </div>
                 </div>
             </div>
@@ -141,6 +191,23 @@
     <footer class="footer">
         <p>📋 Sourced from latest NCERT 2025-26 & 2026-27 textbook databases | Pure HTML subscripts & superscripts</p>
     </footer>
+
+    <!-- Edit Question Modal -->
+    <div id="editModal" class="modal-overlay" style="display:none">
+        <div class="modal-box modal-box-wide">
+            <div class="modal-header">
+                <h3>Edit Question — <span id="editModalSlotLabel"></span></h3>
+                <button class="modal-close-btn" onclick="closeEditModal()">&times;</button>
+            </div>
+            <div class="modal-body" id="editModalBody">
+                <!-- Dynamic edit form injected here -->
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-outline btn-sm" onclick="closeEditModal()">Cancel</button>
+                <button class="btn btn-primary btn-sm" onclick="saveEditModal()"><i class="fas fa-save"></i> Save Changes</button>
+            </div>
+        </div>
+    </div>
 
     <!-- Overlay Allocator Modal -->
     <div id="allocatorModal" class="modal-overlay" style="display:none">
