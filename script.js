@@ -211,6 +211,7 @@ const blueprintSlotMatrix = document.getElementById('blueprintSlotMatrix');
 const paperPreviewSection = document.getElementById('paperPreviewSection');
 const boardPaper = document.getElementById('boardPaper');
 const boardAnswers = document.getElementById('boardAnswers');
+const btnDownloadWord = document.getElementById('btnDownloadWord');
 const difficultySelect = document.getElementById('difficultySelect');
 
 const blueprintImageInput = document.getElementById('blueprintImageInput');
@@ -875,7 +876,7 @@ function compileBoardPaper() {
         <div class="board-instructions">
             <strong>General Instructions:</strong>
             <ol>
-                <li>This question paper contains 39 questions in total.</li>
+                <li>This question paper contains ${bp.slots.length} questions in total.</li>
                 <li>All questions are compulsory.</li>
                 <li>There is no overall choice. However, internal choices are provided in several questions. A student has to attempt only one of the alternatives in such questions.</li>
                 <li>Use of calculators is not permitted. Draw neat labelled diagrams wherever necessary.</li>
@@ -999,6 +1000,177 @@ function compileBoardPaper() {
     boardPaper.innerHTML = paperHTML;
     boardAnswers.innerHTML = answerHTML;
 }
+
+// ===== Download the compiled paper + answer key as an editable Word (.doc) file =====
+// Word's HTML rendering engine does NOT support CSS grid/flexbox, so this builds
+// a separate, Word-safe version of the same content using only paragraphs and
+// tables (which Word handles natively and keeps fully editable).
+function buildWordSafeQuestionBlock(slot, q, isOR) {
+    let html = '';
+    if (isOR) {
+        html += `<p style="text-align:center; margin:10pt 0 6pt 0;"><b>— OR —</b></p>`;
+    }
+    html += `<p style="margin:6pt 0 2pt 0; font-family:Calibri, Arial, sans-serif; font-size:11pt;">`;
+    html += `<b>Q${slot.num}.</b> ${formatContent(q.question || q.assertion || q.case_study)}`;
+    html += ` <b>[${slot.marks} Mark${slot.marks > 1 ? 's' : ''}]</b></p>`;
+
+    if (slot.type === 'mcq') {
+        html += `<table style="margin-left:24pt; border:none;" cellpadding="2"><tr>
+            <td style="width:50%; font-size:11pt;"><b>(a)</b> ${formatContent(q.options?.a)}</td>
+            <td style="width:50%; font-size:11pt;"><b>(b)</b> ${formatContent(q.options?.b)}</td>
+        </tr><tr>
+            <td style="font-size:11pt;"><b>(c)</b> ${formatContent(q.options?.c)}</td>
+            <td style="font-size:11pt;"><b>(d)</b> ${formatContent(q.options?.d)}</td>
+        </tr></table>`;
+    } else if (slot.type === 'assertion_reason') {
+        html += `<p style="margin-left:24pt; font-size:11pt;"><b>Assertion (A):</b> ${formatContent(q.assertion)}<br>
+            <b>Reason (R):</b> ${formatContent(q.reason)}</p>
+            <p style="margin-left:24pt; font-size:11pt;">
+            (a) Both A and R are true and R is the correct explanation of A.<br>
+            (b) Both A and R are true but R is not the correct explanation of A.<br>
+            (c) A is true but R is false.<br>
+            (d) A is false but R is true.</p>`;
+    } else if (slot.type === 'case_based') {
+        html += `<table style="margin-left:24pt; width:90%; background:#FFFBEB; border:1pt solid #FDE68A;"><tr><td style="padding:8pt; font-size:11pt;">${formatContent(q.case_study)}</td></tr></table>`;
+        (q.sub_questions || []).forEach((sq, i) => {
+            const lbl = ['(i)', '(ii)', '(iii)', '(iv)'][i] || `(${i + 1})`;
+            html += `<p style="margin-left:24pt; font-size:11pt;">${lbl} ${formatContent(sq.question)} <i>[1 Mark]</i></p>`;
+        });
+    }
+    return html;
+}
+
+function buildWordSafeAnswerBlock(slot, q, isOR) {
+    let html = `<p style="margin:6pt 0 2pt 0; font-size:11pt;"><b>Q${slot.num}${isOR ? ' (OR Alternative)' : ''} Solution:</b><br>`;
+    if (slot.type === 'mcq') {
+        html += `Correct Option: (${(q.answer || '').toUpperCase()}) ${q.options?.[q.answer] || ''}`;
+    } else if (slot.type === 'assertion_reason') {
+        html += `Correct Option: (${(q.answer || '').toUpperCase()})`;
+    } else if (slot.type === 'case_based') {
+        (q.sub_questions || []).forEach((sq, i) => {
+            const lbl = ['(i)', '(ii)', '(iii)', '(iv)'][i] || `(${i + 1})`;
+            html += `<br>${lbl} ${formatContent(sq.answer)}`;
+        });
+    } else {
+        html += formatContent(q.answer);
+    }
+    html += `</p>`;
+    return html;
+}
+
+function buildWordExportHTML() {
+    const bpKey = blueprintSelect.value;
+    const bp = blueprints[bpKey];
+
+    let paperBody = '';
+    const logoIsEmbeddable = uploadedLogoDataUrl && uploadedLogoDataUrl.startsWith('data:');
+    if (logoIsEmbeddable) {
+        paperBody += `<table style="width:100%; border:none; margin-bottom:6pt;"><tr>
+            <td style="width:100px; vertical-align:middle;"><img src="${uploadedLogoDataUrl}" style="max-height:70px; max-width:100px;"></td>
+            <td style="text-align:center; vertical-align:middle;">
+                <p style="font-size:16pt; font-weight:bold; letter-spacing:1px; margin:0;">CENTRAL BOARD OF SECONDARY EDUCATION</p>
+                <p style="font-size:12pt; font-weight:bold; margin:0;">PRACTICE QUESTION PAPER (2025-26)</p>
+            </td>
+            <td style="width:100px;"></td>
+        </tr></table>`;
+    } else {
+        paperBody += `<p style="text-align:center; font-size:16pt; font-weight:bold; letter-spacing:1px; margin:0;">CENTRAL BOARD OF SECONDARY EDUCATION</p>
+            <p style="text-align:center; font-size:12pt; font-weight:bold; margin:0 0 8pt 0;">PRACTICE QUESTION PAPER (2025-26)</p>`;
+    }
+
+    paperBody += `<table style="width:100%; border-top:2pt solid black; border-bottom:2pt solid black; margin-bottom:10pt;"><tr>
+        <td style="text-align:left; font-weight:bold; font-size:10.5pt; padding:5pt 0;">Subject: ${subjectSelect.value}</td>
+        <td style="text-align:center; font-weight:bold; font-size:10.5pt;">Max Marks: 80</td>
+        <td style="text-align:right; font-weight:bold; font-size:10.5pt;">Time: 3 Hours</td>
+    </tr></table>`;
+
+    paperBody += `<p style="font-size:10.5pt;"><b>General Instructions:</b></p>
+        <ol style="font-size:10.5pt;">
+            <li>This question paper contains ${bp.slots.length} questions in total.</li>
+            <li>All questions are compulsory.</li>
+            <li>There is no overall choice. However, internal choices are provided in several questions. A student has to attempt only one of the alternatives in such questions.</li>
+            <li>Use of calculators is not permitted. Draw neat labelled diagrams wherever necessary.</li>
+        </ol>`;
+
+    let answerBody = `<p style="text-align:center; font-size:14pt; font-weight:bold;">MARKING SCHEME / ANSWER KEY</p>
+        <p style="text-align:center; font-size:10.5pt;">Subject: ${subjectSelect.value} &nbsp;|&nbsp; Max Marks: 80</p>`;
+
+    bp.sections.forEach(sec => {
+        paperBody += `<table style="width:100%; background:#F1F5F9; margin:12pt 0 8pt 0;"><tr><td style="padding:5pt 8pt; font-weight:bold; font-size:11pt; border-left:4pt solid black;">${sec.name}</td></tr></table>`;
+        answerBody += `<table style="width:100%; background:#F1F5F9; margin:12pt 0 8pt 0;"><tr><td style="padding:5pt 8pt; font-weight:bold; font-size:11pt; border-left:4pt solid black;">Solutions: ${sec.name}</td></tr></table>`;
+
+        bp.slots.filter(s => s.sec === sec.id).forEach(slot => {
+            const q = activeDraft[slot.num];
+            if (!q) return;
+
+            paperBody += buildWordSafeQuestionBlock(slot, q, false);
+            answerBody += buildWordSafeAnswerBlock(slot, q, false);
+
+            if (activeORs[slot.num]) {
+                paperBody += buildWordSafeQuestionBlock(slot, activeORs[slot.num], true);
+                answerBody += buildWordSafeAnswerBlock(slot, activeORs[slot.num], true);
+            }
+        });
+    });
+
+    return { paperBody, answerBody };
+}
+
+function downloadWordDocument() {
+    const bpKey = blueprintSelect.value;
+    const bp = blueprints[bpKey];
+    const filledCount = bp.slots.filter(s => activeDraft[s.num]).length;
+
+    if (filledCount < bp.slots.length) {
+        alert(`Please complete all ${bp.slots.length} blueprint slots before downloading (currently ${filledCount} filled). Use "Auto-Generate Remaining Slots" to finish quickly.`);
+        return;
+    }
+
+    const { paperBody, answerBody } = buildWordExportHTML();
+
+    // The xmlns:w / mso conditional-comment wrapper below is the standard
+    // technique for producing a .doc file that Microsoft Word opens as a
+    // real, fully editable document (not a read-only snapshot).
+    const fullHtml = `<!DOCTYPE html>
+<html xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:w="urn:schemas-microsoft-com:office:word" xmlns="http://www.w3.org/TR/REC-html40">
+<head>
+<meta charset="utf-8">
+<title>CBSE Question Paper</title>
+<!--[if gte mso 9]>
+<xml>
+<w:WordDocument>
+<w:View>Print</w:View>
+<w:Zoom>100</w:Zoom>
+<w:DoNotOptimizeForBrowser/>
+</w:WordDocument>
+</xml>
+<![endif]-->
+<style>
+    body { font-family: Calibri, Arial, sans-serif; }
+    table { border-collapse: collapse; }
+</style>
+</head>
+<body>
+${paperBody}
+<br clear="all" style="page-break-before:always">
+${answerBody}
+</body>
+</html>`;
+
+    const blob = new Blob(['\ufeff', fullHtml], { type: 'application/msword;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const cls = classSelect.value || 'Class';
+    const subj = (subjectSelect.value || 'Paper').replace(/[^a-z0-9]+/gi, '_');
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `CBSE_Class${cls}_${subj}_QuestionPaper.doc`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+}
+
+btnDownloadWord.addEventListener('click', downloadWordDocument);
 
 // Toggle printable answers layout
 document.getElementById('btnToggleAnswers').addEventListener('click', () => {
